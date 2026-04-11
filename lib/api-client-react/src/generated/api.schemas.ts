@@ -8,3 +8,69 @@
 export interface HealthStatus {
   status: string;
 }
+
+export interface Paper {
+  id: number;
+  examName: string;
+  year?: string | null;
+  shift?: string | null;
+  totalQuestions: number;
+  fileName?: string | null;
+  createdAt?: string;
+}
+
+export interface Question {
+  id: number;
+  paperId?: number | null;
+  questionNumber: number;
+  questionIdOriginal?: string | null;
+  questionText: string;
+  optionA?: string | null;
+  optionB?: string | null;
+  optionC?: string | null;
+  optionD?: string | null;
+  correctAnswer?: string | null;
+  chosenOption?: string | null;
+  status?: string | null;
+  hasFigure?: boolean;
+  figureData?: string | null;
+  subject?: string | null;
+  note?: string | null;
+  createdAt?: string;
+}
+
+export interface UploadResult {
+  success: boolean;
+  paperId: number;
+  totalQuestions: number;
+  message: string;
+}
+
+export type QuestionStatsBySubjectItem = {
+  subject?: string | null;
+  count: number;
+};
+
+export interface QuestionStats {
+  totalPapers: number;
+  totalQuestions: number;
+  withFigures: number;
+  bySubject: QuestionStatsBySubjectItem[];
+}
+
+export type UploadPaperBody = {
+  file: Blob;
+  examName: string;
+  year?: string;
+  shift?: string;
+};
+
+export type ListQuestionsParams = {
+  subject?: string;
+  hasFigure?: boolean;
+  paperId?: number;
+};
+
+export type ProcessAttachedPdfBody = {
+  filePath: string;
+};

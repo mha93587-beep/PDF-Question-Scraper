@@ -7,3 +7,11 @@
  */
 
 export * from "./healthStatus";
+export * from "./listQuestionsParams";
+export * from "./paper";
+export * from "./processAttachedPdfBody";
+export * from "./question";
+export * from "./questionStats";
+export * from "./questionStatsBySubjectItem";
+export * from "./uploadPaperBody";
+export * from "./uploadResult";

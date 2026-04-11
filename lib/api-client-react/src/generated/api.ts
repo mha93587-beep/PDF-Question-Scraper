@@ -5,18 +5,30 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { HealthStatus } from "./api.schemas";
+import type {
+  HealthStatus,
+  ListQuestionsParams,
+  Paper,
+  ProcessAttachedPdfBody,
+  Question,
+  QuestionStats,
+  UploadPaperBody,
+  UploadResult,
+} from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType } from "../custom-fetch";
+import type { ErrorType, BodyType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -99,3 +111,686 @@ export function useHealthCheck<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Upload and process a PDF paper
+ */
+export const getUploadPaperUrl = () => {
+  return `/api/papers/upload`;
+};
+
+export const uploadPaper = async (
+  uploadPaperBody: UploadPaperBody,
+  options?: RequestInit,
+): Promise<UploadResult> => {
+  const formData = new FormData();
+  formData.append(`file`, uploadPaperBody.file);
+  formData.append(`examName`, uploadPaperBody.examName);
+  if (uploadPaperBody.year !== undefined) {
+    formData.append(`year`, uploadPaperBody.year);
+  }
+  if (uploadPaperBody.shift !== undefined) {
+    formData.append(`shift`, uploadPaperBody.shift);
+  }
+
+  return customFetch<UploadResult>(getUploadPaperUrl(), {
+    ...options,
+    method: "POST",
+    body: formData,
+  });
+};
+
+export const getUploadPaperMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadPaper>>,
+    TError,
+    { data: BodyType<UploadPaperBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof uploadPaper>>,
+  TError,
+  { data: BodyType<UploadPaperBody> },
+  TContext
+> => {
+  const mutationKey = ["uploadPaper"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof uploadPaper>>,
+    { data: BodyType<UploadPaperBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return uploadPaper(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UploadPaperMutationResult = NonNullable<
+  Awaited<ReturnType<typeof uploadPaper>>
+>;
+export type UploadPaperMutationBody = BodyType<UploadPaperBody>;
+export type UploadPaperMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Upload and process a PDF paper
+ */
+export const useUploadPaper = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadPaper>>,
+    TError,
+    { data: BodyType<UploadPaperBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof uploadPaper>>,
+  TError,
+  { data: BodyType<UploadPaperBody> },
+  TContext
+> => {
+  return useMutation(getUploadPaperMutationOptions(options));
+};
+
+/**
+ * @summary List all papers
+ */
+export const getListPapersUrl = () => {
+  return `/api/papers`;
+};
+
+export const listPapers = async (options?: RequestInit): Promise<Paper[]> => {
+  return customFetch<Paper[]>(getListPapersUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListPapersQueryKey = () => {
+  return [`/api/papers`] as const;
+};
+
+export const getListPapersQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPapers>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listPapers>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListPapersQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listPapers>>> = ({
+    signal,
+  }) => listPapers({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPapers>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPapersQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPapers>>
+>;
+export type ListPapersQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List all papers
+ */
+
+export function useListPapers<
+  TData = Awaited<ReturnType<typeof listPapers>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listPapers>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPapersQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get paper details
+ */
+export const getGetPaperUrl = (id: number) => {
+  return `/api/papers/${id}`;
+};
+
+export const getPaper = async (
+  id: number,
+  options?: RequestInit,
+): Promise<Paper> => {
+  return customFetch<Paper>(getGetPaperUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPaperQueryKey = (id: number) => {
+  return [`/api/papers/${id}`] as const;
+};
+
+export const getGetPaperQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPaper>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPaper>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetPaperQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getPaper>>> = ({
+    signal,
+  }) => getPaper(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getPaper>>, TError, TData> & {
+    queryKey: QueryKey;
+  };
+};
+
+export type GetPaperQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPaper>>
+>;
+export type GetPaperQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get paper details
+ */
+
+export function useGetPaper<
+  TData = Awaited<ReturnType<typeof getPaper>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPaper>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPaperQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get questions for a paper
+ */
+export const getGetPaperQuestionsUrl = (id: number) => {
+  return `/api/papers/${id}/questions`;
+};
+
+export const getPaperQuestions = async (
+  id: number,
+  options?: RequestInit,
+): Promise<Question[]> => {
+  return customFetch<Question[]>(getGetPaperQuestionsUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPaperQuestionsQueryKey = (id: number) => {
+  return [`/api/papers/${id}/questions`] as const;
+};
+
+export const getGetPaperQuestionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPaperQuestions>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPaperQuestions>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetPaperQuestionsQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPaperQuestions>>
+  > = ({ signal }) => getPaperQuestions(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPaperQuestions>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPaperQuestionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPaperQuestions>>
+>;
+export type GetPaperQuestionsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get questions for a paper
+ */
+
+export function useGetPaperQuestions<
+  TData = Awaited<ReturnType<typeof getPaperQuestions>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPaperQuestions>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPaperQuestionsQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List all questions with optional filters
+ */
+export const getListQuestionsUrl = (params?: ListQuestionsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/questions?${stringifiedParams}`
+    : `/api/questions`;
+};
+
+export const listQuestions = async (
+  params?: ListQuestionsParams,
+  options?: RequestInit,
+): Promise<Question[]> => {
+  return customFetch<Question[]>(getListQuestionsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListQuestionsQueryKey = (params?: ListQuestionsParams) => {
+  return [`/api/questions`, ...(params ? [params] : [])] as const;
+};
+
+export const getListQuestionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listQuestions>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListQuestionsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listQuestions>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListQuestionsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listQuestions>>> = ({
+    signal,
+  }) => listQuestions(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listQuestions>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListQuestionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listQuestions>>
+>;
+export type ListQuestionsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List all questions with optional filters
+ */
+
+export function useListQuestions<
+  TData = Awaited<ReturnType<typeof listQuestions>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListQuestionsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listQuestions>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListQuestionsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get question details
+ */
+export const getGetQuestionUrl = (id: number) => {
+  return `/api/questions/${id}`;
+};
+
+export const getQuestion = async (
+  id: number,
+  options?: RequestInit,
+): Promise<Question> => {
+  return customFetch<Question>(getGetQuestionUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetQuestionQueryKey = (id: number) => {
+  return [`/api/questions/${id}`] as const;
+};
+
+export const getGetQuestionQueryOptions = <
+  TData = Awaited<ReturnType<typeof getQuestion>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getQuestion>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetQuestionQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getQuestion>>> = ({
+    signal,
+  }) => getQuestion(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getQuestion>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetQuestionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getQuestion>>
+>;
+export type GetQuestionQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get question details
+ */
+
+export function useGetQuestion<
+  TData = Awaited<ReturnType<typeof getQuestion>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getQuestion>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetQuestionQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get question statistics
+ */
+export const getGetQuestionStatsUrl = () => {
+  return `/api/questions/stats`;
+};
+
+export const getQuestionStats = async (
+  options?: RequestInit,
+): Promise<QuestionStats> => {
+  return customFetch<QuestionStats>(getGetQuestionStatsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetQuestionStatsQueryKey = () => {
+  return [`/api/questions/stats`] as const;
+};
+
+export const getGetQuestionStatsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getQuestionStats>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getQuestionStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetQuestionStatsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getQuestionStats>>
+  > = ({ signal }) => getQuestionStats({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getQuestionStats>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetQuestionStatsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getQuestionStats>>
+>;
+export type GetQuestionStatsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get question statistics
+ */
+
+export function useGetQuestionStats<
+  TData = Awaited<ReturnType<typeof getQuestionStats>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getQuestionStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetQuestionStatsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Process an already attached PDF file
+ */
+export const getProcessAttachedPdfUrl = (id: number) => {
+  return `/api/papers/${id}/process-attached`;
+};
+
+export const processAttachedPdf = async (
+  id: number,
+  processAttachedPdfBody: ProcessAttachedPdfBody,
+  options?: RequestInit,
+): Promise<UploadResult> => {
+  return customFetch<UploadResult>(getProcessAttachedPdfUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(processAttachedPdfBody),
+  });
+};
+
+export const getProcessAttachedPdfMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof processAttachedPdf>>,
+    TError,
+    { id: number; data: BodyType<ProcessAttachedPdfBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof processAttachedPdf>>,
+  TError,
+  { id: number; data: BodyType<ProcessAttachedPdfBody> },
+  TContext
+> => {
+  const mutationKey = ["processAttachedPdf"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof processAttachedPdf>>,
+    { id: number; data: BodyType<ProcessAttachedPdfBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return processAttachedPdf(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ProcessAttachedPdfMutationResult = NonNullable<
+  Awaited<ReturnType<typeof processAttachedPdf>>
+>;
+export type ProcessAttachedPdfMutationBody = BodyType<ProcessAttachedPdfBody>;
+export type ProcessAttachedPdfMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Process an already attached PDF file
+ */
+export const useProcessAttachedPdf = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof processAttachedPdf>>,
+    TError,
+    { id: number; data: BodyType<ProcessAttachedPdfBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof processAttachedPdf>>,
+  TError,
+  { id: number; data: BodyType<ProcessAttachedPdfBody> },
+  TContext
+> => {
+  return useMutation(getProcessAttachedPdfMutationOptions(options));
+};

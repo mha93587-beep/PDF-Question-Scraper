@@ -14,3 +14,171 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * @summary Upload and process a PDF paper
+ */
+export const UploadPaperBody = zod.object({
+  file: zod.instanceof(File),
+  examName: zod.string(),
+  year: zod.string().optional(),
+  shift: zod.string().optional(),
+});
+
+export const UploadPaperResponse = zod.object({
+  success: zod.boolean(),
+  paperId: zod.number(),
+  totalQuestions: zod.number(),
+  message: zod.string(),
+});
+
+/**
+ * @summary List all papers
+ */
+export const ListPapersResponseItem = zod.object({
+  id: zod.number(),
+  examName: zod.string(),
+  year: zod.string().nullish(),
+  shift: zod.string().nullish(),
+  totalQuestions: zod.number(),
+  fileName: zod.string().nullish(),
+  createdAt: zod.string().optional(),
+});
+export const ListPapersResponse = zod.array(ListPapersResponseItem);
+
+/**
+ * @summary Get paper details
+ */
+export const GetPaperParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetPaperResponse = zod.object({
+  id: zod.number(),
+  examName: zod.string(),
+  year: zod.string().nullish(),
+  shift: zod.string().nullish(),
+  totalQuestions: zod.number(),
+  fileName: zod.string().nullish(),
+  createdAt: zod.string().optional(),
+});
+
+/**
+ * @summary Get questions for a paper
+ */
+export const GetPaperQuestionsParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetPaperQuestionsResponseItem = zod.object({
+  id: zod.number(),
+  paperId: zod.number().nullish(),
+  questionNumber: zod.number(),
+  questionIdOriginal: zod.string().nullish(),
+  questionText: zod.string(),
+  optionA: zod.string().nullish(),
+  optionB: zod.string().nullish(),
+  optionC: zod.string().nullish(),
+  optionD: zod.string().nullish(),
+  correctAnswer: zod.string().nullish(),
+  chosenOption: zod.string().nullish(),
+  status: zod.string().nullish(),
+  hasFigure: zod.boolean().optional(),
+  figureData: zod.string().nullish(),
+  subject: zod.string().nullish(),
+  note: zod.string().nullish(),
+  createdAt: zod.string().optional(),
+});
+export const GetPaperQuestionsResponse = zod.array(
+  GetPaperQuestionsResponseItem,
+);
+
+/**
+ * @summary List all questions with optional filters
+ */
+export const ListQuestionsQueryParams = zod.object({
+  subject: zod.coerce.string().optional(),
+  hasFigure: zod.coerce.boolean().optional(),
+  paperId: zod.coerce.number().optional(),
+});
+
+export const ListQuestionsResponseItem = zod.object({
+  id: zod.number(),
+  paperId: zod.number().nullish(),
+  questionNumber: zod.number(),
+  questionIdOriginal: zod.string().nullish(),
+  questionText: zod.string(),
+  optionA: zod.string().nullish(),
+  optionB: zod.string().nullish(),
+  optionC: zod.string().nullish(),
+  optionD: zod.string().nullish(),
+  correctAnswer: zod.string().nullish(),
+  chosenOption: zod.string().nullish(),
+  status: zod.string().nullish(),
+  hasFigure: zod.boolean().optional(),
+  figureData: zod.string().nullish(),
+  subject: zod.string().nullish(),
+  note: zod.string().nullish(),
+  createdAt: zod.string().optional(),
+});
+export const ListQuestionsResponse = zod.array(ListQuestionsResponseItem);
+
+/**
+ * @summary Get question details
+ */
+export const GetQuestionParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetQuestionResponse = zod.object({
+  id: zod.number(),
+  paperId: zod.number().nullish(),
+  questionNumber: zod.number(),
+  questionIdOriginal: zod.string().nullish(),
+  questionText: zod.string(),
+  optionA: zod.string().nullish(),
+  optionB: zod.string().nullish(),
+  optionC: zod.string().nullish(),
+  optionD: zod.string().nullish(),
+  correctAnswer: zod.string().nullish(),
+  chosenOption: zod.string().nullish(),
+  status: zod.string().nullish(),
+  hasFigure: zod.boolean().optional(),
+  figureData: zod.string().nullish(),
+  subject: zod.string().nullish(),
+  note: zod.string().nullish(),
+  createdAt: zod.string().optional(),
+});
+
+/**
+ * @summary Get question statistics
+ */
+export const GetQuestionStatsResponse = zod.object({
+  totalPapers: zod.number(),
+  totalQuestions: zod.number(),
+  withFigures: zod.number(),
+  bySubject: zod.array(
+    zod.object({
+      subject: zod.string().nullish(),
+      count: zod.number(),
+    }),
+  ),
+});
+
+/**
+ * @summary Process an already attached PDF file
+ */
+export const ProcessAttachedPdfParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ProcessAttachedPdfBody = zod.object({
+  filePath: zod.string(),
+});
+
+export const ProcessAttachedPdfResponse = zod.object({
+  success: zod.boolean(),
+  paperId: zod.number(),
+  totalQuestions: zod.number(),
+  message: zod.string(),
+});

@@ -10,6 +10,10 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: papers
+    description: Paper operations
+  - name: questions
+    description: Question operations
 paths:
   /healthz:
     get:
@@ -24,6 +28,175 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /papers/upload:
+    post:
+      operationId: uploadPaper
+      tags: [papers]
+      summary: Upload and process a PDF paper
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                examName:
+                  type: string
+                year:
+                  type: string
+                shift:
+                  type: string
+              required:
+                - file
+                - examName
+      responses:
+        "200":
+          description: Paper uploaded and processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadResult"
+  /papers:
+    get:
+      operationId: listPapers
+      tags: [papers]
+      summary: List all papers
+      responses:
+        "200":
+          description: List of papers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Paper"
+  /papers/{id}:
+    get:
+      operationId: getPaper
+      tags: [papers]
+      summary: Get paper details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Paper details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Paper"
+  /papers/{id}/questions:
+    get:
+      operationId: getPaperQuestions
+      tags: [questions]
+      summary: Get questions for a paper
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of questions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Question"
+  /questions:
+    get:
+      operationId: listQuestions
+      tags: [questions]
+      summary: List all questions with optional filters
+      parameters:
+        - name: subject
+          in: query
+          schema:
+            type: string
+        - name: hasFigure
+          in: query
+          schema:
+            type: boolean
+        - name: paperId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of questions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Question"
+  /questions/{id}:
+    get:
+      operationId: getQuestion
+      tags: [questions]
+      summary: Get question details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Question details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Question"
+  /questions/stats:
+    get:
+      operationId: getQuestionStats
+      tags: [questions]
+      summary: Get question statistics
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuestionStats"
+  /papers/{id}/process-attached:
+    post:
+      operationId: processAttachedPdf
+      tags: [papers]
+      summary: Process an already attached PDF file
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filePath:
+                  type: string
+              required:
+                - filePath
+      responses:
+        "200":
+          description: Processing result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadResult"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +206,122 @@ components:
           type: string
       required:
         - status
-
+    Paper:
+      type: object
+      properties:
+        id:
+          type: integer
+        examName:
+          type: string
+        year:
+          type: string
+          nullable: true
+        shift:
+          type: string
+          nullable: true
+        totalQuestions:
+          type: integer
+        fileName:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required:
+        - id
+        - examName
+        - totalQuestions
+    Question:
+      type: object
+      properties:
+        id:
+          type: integer
+        paperId:
+          type: integer
+          nullable: true
+        questionNumber:
+          type: integer
+        questionIdOriginal:
+          type: string
+          nullable: true
+        questionText:
+          type: string
+        optionA:
+          type: string
+          nullable: true
+        optionB:
+          type: string
+          nullable: true
+        optionC:
+          type: string
+          nullable: true
+        optionD:
+          type: string
+          nullable: true
+        correctAnswer:
+          type: string
+          nullable: true
+        chosenOption:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+        hasFigure:
+          type: boolean
+        figureData:
+          type: string
+          nullable: true
+        subject:
+          type: string
+          nullable: true
+        note:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required:
+        - id
+        - questionNumber
+        - questionText
+    UploadResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        paperId:
+          type: integer
+        totalQuestions:
+          type: integer
+        message:
+          type: string
+      required:
+        - success
+        - paperId
+        - totalQuestions
+        - message
+    QuestionStats:
+      type: object
+      properties:
+        totalPapers:
+          type: integer
+        totalQuestions:
+          type: integer
+        withFigures:
+          type: integer
+        bySubject:
+          type: array
+          items:
+            type: object
+            properties:
+              subject:
+                type: string
+                nullable: true
+              count:
+                type: integer
+            required:
+              - count
+      required:
+        - totalPapers
+        - totalQuestions
+        - withFigures
+        - bySubject
