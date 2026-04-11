@@ -38,65 +38,6 @@ function cleanText(text: string): string {
     .replace(/\s+/g, " ");
 }
 
-/**
- * Detect fraction patterns spread across multiple lines and join them with "/".
- * e.g. "4sinA\n3" → "4sinA/3"
- * e.g. "(4+4cot²A)tanA\n(3+3tan²A)cosecA" → "(4+4cot²A)tanA / (3+3tan²A)cosecA"
- */
-function reconstructFractions(text: string): string {
-  const lines = text.split("\n");
-  const out: string[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const curr = lines[i].trim();
-    const next = (lines[i + 1] ?? "").trim();
-
-    // Skip meta lines
-    if (curr.match(/^(Note|Question\s*ID|Status|Chosen|Ans)\b/i)) {
-      out.push(curr);
-      i++;
-      continue;
-    }
-
-    // Pattern 1: numerator line + pure-number denominator line → "num/denom"
-    if (curr.length > 0 && /^\d{1,4}$/.test(next) && !next.match(/^[A-D]\s*[.)]/)) {
-      out.push(`${curr}/${next}`);
-      i += 2;
-      continue;
-    }
-
-    // Pattern 2: two consecutive expression lines where neither is an option label →
-    // treat as numerator/denominator of a larger fraction
-    if (
-      curr.length > 2 &&
-      next.length > 2 &&
-      !curr.match(/^\d{1,2}\.\s/) &&
-      !next.match(/^\d{1,2}\.\s/) &&
-      !curr.match(/^[A-D]\s*[.)]/) &&
-      !next.match(/^[A-D]\s*[.)]/) &&
-      curr.match(/[A-Za-z²³]/) &&
-      next.match(/[A-Za-z²³]/) &&
-      // both lines are short (likely fraction halves, not full sentences)
-      curr.length < 60 &&
-      next.length < 60
-    ) {
-      const afterNext = (lines[i + 2] ?? "").trim();
-      // Only merge if the line after next is blank/option/meta (i.e. these two lines form a complete fraction)
-      if (!afterNext || afterNext.match(/^[A-D\d]\s*[.)]/) || afterNext.match(/^(Ans|Note|Question)/i)) {
-        out.push(`${curr} / ${next}`);
-        i += 2;
-        continue;
-      }
-    }
-
-    out.push(curr);
-    i++;
-  }
-
-  return out.filter((l) => l !== "").join("\n");
-}
-
 const execFileAsync = promisify(execFile);
 
 interface PdfWord {
@@ -199,23 +140,13 @@ async function extractTextWithPdftotext(pdfPath: string): Promise<string> {
 
 async function ocrImage(imagePath: string): Promise<string> {
   try {
-    const { stdout } = await execFileAsync(
-      "tesseract",
-      [imagePath, "stdout", "--oem", "1", "--psm", "6", "-c", "preserve_interword_spaces=1"],
-      { maxBuffer: 5 * 1024 * 1024 }
-    );
+    const { stdout } = await execFileAsync("tesseract", [imagePath, "stdout", "--psm", "4"], {
+      maxBuffer: 5 * 1024 * 1024,
+    });
     return typeof stdout === "string" ? stdout : String(stdout);
-  } catch {
-    try {
-      // fallback to default psm if LSTM fails
-      const { stdout } = await execFileAsync("tesseract", [imagePath, "stdout", "--psm", "4"], {
-        maxBuffer: 5 * 1024 * 1024,
-      });
-      return typeof stdout === "string" ? stdout : String(stdout);
-    } catch (err) {
-      logger.warn({ err }, "OCR failed for PDF question crop");
-      return "";
-    }
+  } catch (err) {
+    logger.warn({ err }, "OCR failed for PDF question crop");
+    return "";
   }
 }
 
@@ -367,12 +298,11 @@ function cleanOcrValue(value: string): string {
 }
 
 function extractOptionFromOcr(text: string, label: "A" | "B" | "C" | "D"): string | null {
-  const reconstructed = reconstructFractions(text);
   const nextLabels = label === "A" ? "B" : label === "B" ? "C" : label === "C" ? "D" : "Ans|$";
   const pattern = label === "D"
     ? new RegExp(`(?:^|\\n)\\s*${label}\\s*[.)]\\s*([\\s\\S]*?)(?=\\n\\s*(?:Ans|Question\\s*ID|Status|Chosen\\s*Option)\\b|$)`, "i")
     : new RegExp(`(?:^|\\n)\\s*${label}\\s*[.)]\\s*([\\s\\S]*?)(?=\\n\\s*(?:${nextLabels})\\s*[.)]|\\n\\s*Ans\\b|$)`, "i");
-  const match = reconstructed.match(pattern);
+  const match = text.match(pattern);
   const cleaned = match ? cleanOcrValue(match[1]) : "";
   return cleaned || null;
 }
@@ -390,9 +320,7 @@ function extractQuestionTextFromOcr(text: string, questionNumber: number): strin
 function ocrHasUsableText(text: string): boolean {
   const cleaned = cleanOcrValue(normalizeOcrText(text));
   const wordCount = (cleaned.match(/[A-Za-z0-9₹]+/g) || []).length;
-  // Also accept math-heavy content (formulas, equations)
-  const mathSymbols = (cleaned.match(/[+\-×÷=²³√π°%()]/g) || []).length;
-  return wordCount >= 8 || (wordCount >= 4 && mathSymbols >= 2);
+  return wordCount >= 8;
 }
 
 function shouldKeepFigureImage(questionText: string, visual: QuestionVisual | null): boolean {
@@ -400,20 +328,24 @@ function shouldKeepFigureImage(questionText: string, visual: QuestionVisual | nu
 
   const combinedText = `${questionText} ${visual.ocrText}`.toLowerCase();
   const figureKeywords = [
-    // Visual/spatial
-    "figure", "diagram", "image", "photo", "picture", "shown", "given below",
-    "following", "mirror", "water image", "embedded", "paper folding",
-    "cube", "dice", "venn", "pattern", "आकृति", "चित्र",
-    // Charts & data
-    "bar chart", "pie chart", "bar graph", "pie graph", "histogram",
-    "table", "chart", "graph",
-    // Math visuals (fractions, equations that need layout)
-    "simplify", "solve", "calculate", "evaluate",
-    "sin", "cos", "tan", "cot", "sec", "cosec", "cot²", "tan²", "sin²", "cos²",
-    "trigonometric", "trigonometry",
-    "√", "∛", "²", "³", "∑", "∫",
-    // Reasoning visuals
-    "series", "analogy", "matrix", "missing", "next term",
+    "figure",
+    "diagram",
+    "image",
+    "photo",
+    "picture",
+    "shown",
+    "given below",
+    "following",
+    "mirror",
+    "water image",
+    "embedded",
+    "paper folding",
+    "cube",
+    "dice",
+    "venn",
+    "pattern",
+    "आकृति",
+    "चित्र",
   ];
 
   if (figureKeywords.some((keyword) => combinedText.includes(keyword))) {
@@ -460,15 +392,13 @@ function parse2016Format(text: string, visualsByQuestion: Map<number, QuestionVi
     if (!questionText) {
       const mainTextMatch = block.match(/Q\.\d+\s*([\s\S]*?)(?=Question ID|Ans\s)/);
       if (mainTextMatch) {
-        questionText = cleanText(reconstructFractions(mainTextMatch[1]));
+        questionText = cleanText(mainTextMatch[1]);
       }
     }
 
     const visual = visualsByQuestion.get(questionNumber) || null;
     const ocrQuestionText = visual ? extractQuestionTextFromOcr(visual.ocrText, questionNumber) : null;
-    // Use OCR text when pdftotext gives garbage: very short, no real words, only digits, or looks like a QID
-    const looksLikeGarbage = questionText.length < 15 || !questionText.match(/[a-zA-Z]{3,}/) || /^\d{3,6}$/.test(questionText.trim());
-    if (ocrQuestionText && looksLikeGarbage) {
+    if (ocrQuestionText && (questionText.length < 10 || !questionText.match(/[a-zA-Z]{3,}/) || questionText.match(/^\d+\/\d+$/))) {
       questionText = ocrQuestionText;
     }
 
@@ -480,7 +410,7 @@ function parse2016Format(text: string, visualsByQuestion: Map<number, QuestionVi
 
     const ansSection = block.match(/Ans\s+([\s\S]*?)$/);
     if (ansSection) {
-      const ansText = reconstructFractions(ansSection[1]);
+      const ansText = ansSection[1];
 
       const opt1Match = ansText.match(/1\.\s*(.*?)(?=\s*2\.|$)/s);
       const opt2Match = ansText.match(/2\.\s*(.*?)(?=\s*3\.|$)/s);
@@ -573,7 +503,7 @@ function parse2025Format(text: string, visualsByQuestion: Map<number, QuestionVi
     let optionD: string | null = null;
     let correctAnswer: string | null = null;
 
-    const ansSection = reconstructFractions(block.substring(actualAnsIndex));
+    const ansSection = block.substring(actualAnsIndex);
 
     const optAMatch = ansSection.match(/\bA\.\s*(.*?)(?=\s*\bB\.|$)/s);
     const optBMatch = ansSection.match(/\bB\.\s*(.*?)(?=\s*\bC\.|$)/s);
