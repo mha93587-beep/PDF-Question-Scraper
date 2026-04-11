@@ -13,7 +13,7 @@ A full-stack web application that scrapes previous year question papers from PDF
 - **API framework**: Express 5
 - **Database**: PostgreSQL (Neon) + Drizzle ORM
 - **Frontend**: React + Vite + Tailwind CSS + shadcn/ui
-- **PDF Processing**: pdf-parse (v1)
+- **PDF Processing**: Poppler CLI (`pdftotext`, `pdftoppm`) with `pdf-parse` fallback
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
@@ -22,10 +22,10 @@ A full-stack web application that scrapes previous year question papers from PDF
 
 ### PDF Processing Pipeline
 1. **PDF Upload** - User uploads PDF via the web interface or processes pre-attached files
-2. **Text Extraction** - `pdf-parse` extracts raw text from PDF
+2. **Text Extraction** - `pdftotext -layout` extracts raw text from PDF, with `pdf-parse` fallback
 3. **Format Detection** - Auto-detects PDF format (2016 style vs 2025 style)
 4. **Question Parsing** - Regex-based parser extracts questions, options, answers
-5. **Figure Detection** - Questions with minimal text are flagged as figure/image-based
+5. **PDF Snippet Capture** - Each question is cropped from the original PDF and saved in `figureData` so math figures, formulas, and reasoning diagrams remain visible even when text extraction misses them
 6. **Database Storage** - All questions saved to PostgreSQL
 
 ### Supported PDF Formats

@@ -115,6 +115,17 @@ export default function QuestionsPage() {
 
                 <p className="text-foreground mb-3 leading-relaxed">{q.questionText}</p>
 
+                {q.figureData && (
+                  <div className="mb-3 rounded-lg border bg-white p-2">
+                    <img
+                      src={q.figureData}
+                      alt={`Question ${q.questionNumber} original PDF snippet`}
+                      className="max-h-[420px] w-full object-contain"
+                      loading="lazy"
+                    />
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   {[
                     { label: "A", value: q.optionA },

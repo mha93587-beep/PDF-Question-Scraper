@@ -1,4 +1,9 @@
 import { logger } from "./logger";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 
 interface ParsedQuestion {
   questionNumber: number;
@@ -12,6 +17,7 @@ interface ParsedQuestion {
   chosenOption: string | null;
   status: string | null;
   hasFigure: boolean;
+  figureData: string | null;
   note: string | null;
 }
 
@@ -22,7 +28,213 @@ export interface ParseResult {
 }
 
 function cleanText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  return text
+    .replace(/\f/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n\s+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+const execFileAsync = promisify(execFile);
+
+interface PdfWord {
+  text: string;
+  xMin: number;
+  yMin: number;
+  xMax: number;
+  yMax: number;
+}
+
+interface PdfPage {
+  number: number;
+  width: number;
+  height: number;
+  words: PdfWord[];
+}
+
+interface QuestionCrop {
+  questionNumber: number;
+  dataUrl: string;
+}
+
+function decodeHtmlEntity(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function parseBboxPages(html: string): PdfPage[] {
+  const pages: PdfPage[] = [];
+  const pageRegex = /<page width="([\d.]+)" height="([\d.]+)">([\s\S]*?)(?=<page width=|<\/doc>)/g;
+  let pageMatch: RegExpExecArray | null;
+  let pageNumber = 1;
+
+  while ((pageMatch = pageRegex.exec(html)) !== null) {
+    const words: PdfWord[] = [];
+    const wordRegex = /<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">([\s\S]*?)<\/word>/g;
+    let wordMatch: RegExpExecArray | null;
+
+    while ((wordMatch = wordRegex.exec(pageMatch[3])) !== null) {
+      words.push({
+        xMin: Number(wordMatch[1]),
+        yMin: Number(wordMatch[2]),
+        xMax: Number(wordMatch[3]),
+        yMax: Number(wordMatch[4]),
+        text: decodeHtmlEntity(wordMatch[5]).trim(),
+      });
+    }
+
+    pages.push({
+      number: pageNumber,
+      width: Number(pageMatch[1]),
+      height: Number(pageMatch[2]),
+      words,
+    });
+    pageNumber += 1;
+  }
+
+  return pages;
+}
+
+function extract2016QuestionNumber(block: string): number | null {
+  const splitNumberMatch = block.match(/Q\.\s*(\d+)\s*\n\s*(\d+)\s+Question ID/);
+  if (splitNumberMatch) {
+    return Number(`${splitNumberMatch[1]}${splitNumberMatch[2]}`);
+  }
+
+  const qNumMatch = block.match(/Q\.(\d+)/);
+  if (qNumMatch) {
+    return Number(qNumMatch[1]);
+  }
+
+  const subQuestionMatch = block.match(/SubQuestion No\s*:\s*(\d+)/);
+  return subQuestionMatch ? Number(subQuestionMatch[1]) : null;
+}
+
+function runBinary(command: string, args: string[]): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { encoding: "buffer", maxBuffer: 30 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        const detail = Buffer.isBuffer(stderr) ? stderr.toString("utf8") : String(stderr || "");
+        reject(new Error(`${command} failed: ${detail || error.message}`));
+        return;
+      }
+      resolve(Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout));
+    });
+  });
+}
+
+async function extractTextWithPdftotext(pdfPath: string): Promise<string> {
+  const outputPath = `${pdfPath}.txt`;
+  await execFileAsync("pdftotext", ["-layout", "-enc", "UTF-8", pdfPath, outputPath], {
+    maxBuffer: 30 * 1024 * 1024,
+  });
+  return readFile(outputPath, "utf8");
+}
+
+async function renderQuestionCrop(
+  tempDir: string,
+  pdfPath: string,
+  page: PdfPage,
+  yStart: number,
+  yEnd: number,
+  renderedPages: Map<number, string>,
+): Promise<string | null> {
+  const renderPrefix = path.join(tempDir, `page-${page.number}`);
+  let renderedPath = renderedPages.get(page.number);
+  if (!renderedPath) {
+    await execFileAsync("pdftoppm", ["-png", "-r", "110", "-f", String(page.number), "-l", String(page.number), pdfPath, renderPrefix], {
+      maxBuffer: 30 * 1024 * 1024,
+    });
+    renderedPath = `${renderPrefix}-${String(page.number).padStart(2, "0")}.png`;
+    renderedPages.set(page.number, renderedPath);
+  }
+  const scale = 110 / 72;
+  const margin = 8;
+  const y = Math.max(0, Math.floor((yStart - margin) * scale));
+  const height = Math.max(40, Math.floor((Math.min(page.height, yEnd + margin) - Math.max(0, yStart - margin)) * scale));
+  const width = Math.floor(page.width * scale);
+
+  try {
+    const jpg = await runBinary("convert", [
+      renderedPath,
+      "-crop",
+      `${width}x${height}+0+${y}`,
+      "+repage",
+      "-background",
+      "white",
+      "-alpha",
+      "remove",
+      "-alpha",
+      "off",
+      "-strip",
+      "-resize",
+      "900x>",
+      "-quality",
+      "82",
+      "jpg:-",
+    ]);
+
+    if (jpg.length < 500) {
+      return null;
+    }
+
+    return `data:image/jpeg;base64,${jpg.toString("base64")}`;
+  } catch (err) {
+    logger.warn({ err, page: page.number }, "Failed to crop PDF question image");
+    return null;
+  }
+}
+
+async function extractQuestionCrops(pdfPath: string, tempDir: string): Promise<Map<number, string>> {
+  const bboxPath = path.join(tempDir, "bbox.html");
+  await execFileAsync("pdftotext", ["-bbox-layout", pdfPath, bboxPath], {
+    maxBuffer: 30 * 1024 * 1024,
+  });
+  const html = await readFile(bboxPath, "utf8");
+  const pages = parseBboxPages(html);
+  const anchors = pages.flatMap((page) => {
+    const pageAnchors: { questionNumber: number; page: PdfPage; word: PdfWord }[] = [];
+
+    for (let index = 0; index < page.words.length; index += 1) {
+      const word = page.words[index];
+      const match = word.text.match(/^Q\.(\d+)$/);
+      if (!match) continue;
+
+      const nextWord = page.words[index + 1];
+      const baseNumber = match[1];
+      const joinedNumber =
+        nextWord?.text.match(/^\d{1,2}$/) &&
+        nextWord.xMin < 100 &&
+        nextWord.yMin - word.yMin < 25
+          ? Number(`${baseNumber}${nextWord.text}`)
+          : Number(baseNumber);
+
+      pageAnchors.push({ questionNumber: joinedNumber, page, word });
+    }
+
+    return pageAnchors;
+  });
+  const crops = new Map<number, string>();
+  const renderedPages = new Map<number, string>();
+
+  for (let index = 0; index < anchors.length; index += 1) {
+    const current = anchors[index];
+    const next = anchors[index + 1];
+    const yEnd = next?.page.number === current.page.number ? Math.max(current.word.yMax + 45, next.word.yMin - 5) : current.page.height - 20;
+    const crop = await renderQuestionCrop(tempDir, pdfPath, current.page, current.word.yMin, yEnd, renderedPages);
+    if (crop) {
+      crops.set(current.questionNumber, crop);
+    }
+  }
+
+  return crops;
 }
 
 function detectFormat(text: string): "format_2016" | "format_2025" | "unknown" {
@@ -35,16 +247,14 @@ function detectFormat(text: string): "format_2016" | "format_2025" | "unknown" {
   return "unknown";
 }
 
-function parse2016Format(text: string): ParsedQuestion[] {
+function parse2016Format(text: string, figureDataByQuestion: Map<number, string>): ParsedQuestion[] {
   const questions: ParsedQuestion[] = [];
 
-  const qBlocks = text.split(/(?=\s*Q\.\d+\s)/);
+  const qBlocks = text.match(/(?:^|\n)\s*Q\.\d+\b[\s\S]*?(?=\n\s*Q\.\d+\b|$)/g) || [];
 
   for (const block of qBlocks) {
-    const qNumMatch = block.match(/Q\.(\d+)/);
-    if (!qNumMatch) continue;
-
-    const questionNumber = parseInt(qNumMatch[1], 10);
+    const questionNumber = extract2016QuestionNumber(block);
+    if (!questionNumber) continue;
 
     const qIdMatch = block.match(/Question ID\s*:\s*(\d+)/);
     const questionIdOriginal = qIdMatch ? qIdMatch[1] : null;
@@ -78,7 +288,8 @@ function parse2016Format(text: string): ParsedQuestion[] {
       }
     }
 
-    const hasFigure = questionText.length < 5 && !questionText.match(/[a-zA-Z]/);
+    const figureData = figureDataByQuestion.get(questionNumber) || null;
+    const hasFigure = Boolean(figureData) || (questionText.length < 5 && !questionText.match(/[a-zA-Z]/));
 
     let optionA: string | null = null;
     let optionB: string | null = null;
@@ -131,6 +342,7 @@ function parse2016Format(text: string): ParsedQuestion[] {
         chosenOption,
         status,
         hasFigure,
+        figureData,
         note: note || null,
       });
     }
@@ -139,27 +351,27 @@ function parse2016Format(text: string): ParsedQuestion[] {
   return questions;
 }
 
-function parse2025Format(text: string): ParsedQuestion[] {
+function parse2025Format(text: string, figureDataByQuestion: Map<number, string>): ParsedQuestion[] {
   const questions: ParsedQuestion[] = [];
 
-  const qBlocks = text.split(/(?=Q\.\d+)/);
+  const qBlocks = text.match(/(?:^|\n)\s*Q\.\d+\b[\s\S]*?(?=\n\s*Q\.\d+\b|$)/g) || [];
 
   for (const block of qBlocks) {
-    const qNumMatch = block.match(/^Q\.(\d+)/);
+    const qNumMatch = block.match(/^\s*Q\.(\d+)/);
     if (!qNumMatch) continue;
 
     const questionNumber = parseInt(qNumMatch[1], 10);
 
-    const ansIndex = block.indexOf("\nAns\n");
-    const ansIndex2 = block.indexOf("\nAns ");
-    const actualAnsIndex = ansIndex !== -1 ? ansIndex : ansIndex2;
+    const ansMatch = block.match(/\n\s*Ans\b/);
+    const actualAnsIndex = ansMatch?.index ?? -1;
     if (actualAnsIndex === -1) continue;
 
     const qNumStr = qNumMatch[0];
     let rawQuestionText = block.substring(qNumStr.length, actualAnsIndex);
     let questionText = cleanText(rawQuestionText);
 
-    const hasFigure = questionText.length < 10 && !questionText.match(/[a-zA-Z]{3,}/);
+    const figureData = figureDataByQuestion.get(questionNumber) || null;
+    const hasFigure = Boolean(figureData) && (questionText.length < 12 || !questionText.match(/[a-zA-Z]{3,}/));
 
     if (hasFigure || !questionText) {
       questionText = questionText || `[Question ${questionNumber} - Image/Figure based]`;
@@ -200,6 +412,7 @@ function parse2025Format(text: string): ParsedQuestion[] {
       chosenOption: null,
       status: null,
       hasFigure,
+      figureData,
       note: null,
     });
   }
@@ -208,38 +421,59 @@ function parse2025Format(text: string): ParsedQuestion[] {
 }
 
 export async function parsePdfText(pdfBuffer: Buffer): Promise<ParseResult> {
-  const { createRequire } = await import("module");
-  const require = createRequire(import.meta.url);
-  const pdfParse = require("pdf-parse/lib/pdf-parse.js");
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "question-bank-pdf-"));
+  const pdfPath = path.join(tempDir, "paper.pdf");
 
-  const data = await pdfParse(pdfBuffer);
-  const text = data.text;
+  try {
+    await writeFile(pdfPath, pdfBuffer);
 
-  logger.info({ textLength: text.length }, "PDF text extracted");
-
-  const format = detectFormat(text);
-  logger.info({ format }, "Detected PDF format");
-
-  let questions: ParsedQuestion[];
-
-  if (format === "format_2016") {
-    questions = parse2016Format(text);
-  } else if (format === "format_2025") {
-    questions = parse2025Format(text);
-  } else {
-    questions = parse2025Format(text);
-    if (questions.length === 0) {
-      questions = parse2016Format(text);
+    let text = "";
+    try {
+      text = await extractTextWithPdftotext(pdfPath);
+    } catch (err) {
+      logger.warn({ err }, "pdftotext extraction failed, falling back to pdf-parse");
+      const { createRequire } = await import("module");
+      const require = createRequire(import.meta.url);
+      const pdfParse = require("pdf-parse/lib/pdf-parse.js");
+      const data = await pdfParse(pdfBuffer);
+      text = data.text;
     }
+
+    logger.info({ textLength: text.length }, "PDF text extracted");
+
+    let figureDataByQuestion = new Map<number, string>();
+    try {
+      figureDataByQuestion = await extractQuestionCrops(pdfPath, tempDir);
+    } catch (err) {
+      logger.warn({ err }, "PDF question image extraction failed");
+    }
+
+    const format = detectFormat(text);
+    logger.info({ format }, "Detected PDF format");
+
+    let questions: ParsedQuestion[];
+
+    if (format === "format_2016") {
+      questions = parse2016Format(text, figureDataByQuestion);
+    } else if (format === "format_2025") {
+      questions = parse2025Format(text, figureDataByQuestion);
+    } else {
+      questions = parse2025Format(text, figureDataByQuestion);
+      if (questions.length === 0) {
+        questions = parse2016Format(text, figureDataByQuestion);
+      }
+    }
+
+    logger.info({ questionsFound: questions.length, questionImagesFound: figureDataByQuestion.size }, "Questions parsed");
+
+    return {
+      questions,
+      examName: extractExamName(text),
+      detectedFormat: format,
+    };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
   }
-
-  logger.info({ questionsFound: questions.length }, "Questions parsed");
-
-  return {
-    questions,
-    examName: extractExamName(text),
-    detectedFormat: format,
-  };
 }
 
 function extractExamName(text: string): string {

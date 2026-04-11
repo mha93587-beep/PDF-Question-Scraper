@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import multer from "multer";
 import { readFile } from "fs/promises";
+import path from "path";
 import { eq, sql, count } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { papersTable, questionsTable } from "@workspace/db/schema";
@@ -19,6 +20,14 @@ const upload = multer({
 });
 
 const router: IRouter = Router();
+
+function resolveWorkspacePath(filePath: string): string {
+  if (path.isAbsolute(filePath)) {
+    return filePath;
+  }
+
+  return path.resolve(process.cwd(), "../..", filePath);
+}
 
 router.post("/papers/upload", upload.single("file"), async (req, res): Promise<void> => {
   if (!req.file) {
@@ -59,6 +68,7 @@ router.post("/papers/upload", upload.single("file"), async (req, res): Promise<v
         chosenOption: q.chosenOption,
         status: q.status,
         hasFigure: q.hasFigure,
+        figureData: q.figureData,
         note: q.note,
       }))
     );
@@ -91,17 +101,20 @@ router.post("/papers/:id/process-attached", async (req, res): Promise<void> => {
 
   req.log.info({ filePath }, "Processing attached PDF");
 
-  const buffer = await readFile(filePath);
+  const buffer = await readFile(resolveWorkspacePath(filePath));
   const result = await parsePdfText(buffer);
 
-  const [paper] = await db.select().from(papersTable).where(eq(papersTable.id, paperId));
+  const attachedFileName = filePath.split("/").pop() || "attached.pdf";
+  const [paper] = paperId > 0
+    ? await db.select().from(papersTable).where(eq(papersTable.id, paperId))
+    : await db.select().from(papersTable).where(eq(papersTable.fileName, attachedFileName));
 
   if (!paper) {
     const examName = result.examName || "Unknown Exam";
     const [newPaper] = await db.insert(papersTable).values({
       examName,
       totalQuestions: result.questions.length,
-      fileName: filePath.split("/").pop() || "attached.pdf",
+      fileName: attachedFileName,
     }).returning();
 
     if (result.questions.length > 0) {
@@ -119,6 +132,7 @@ router.post("/papers/:id/process-attached", async (req, res): Promise<void> => {
           chosenOption: q.chosenOption,
           status: q.status,
           hasFigure: q.hasFigure,
+          figureData: q.figureData,
           note: q.note,
         }))
       );
@@ -132,6 +146,8 @@ router.post("/papers/:id/process-attached", async (req, res): Promise<void> => {
     });
     return;
   }
+
+  await db.delete(questionsTable).where(eq(questionsTable.paperId, paper.id));
 
   if (result.questions.length > 0) {
     await db.insert(questionsTable).values(
@@ -148,6 +164,7 @@ router.post("/papers/:id/process-attached", async (req, res): Promise<void> => {
         chosenOption: q.chosenOption,
         status: q.status,
         hasFigure: q.hasFigure,
+        figureData: q.figureData,
         note: q.note,
       }))
     );

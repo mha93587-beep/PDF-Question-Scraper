@@ -67,6 +67,17 @@ export default function PaperDetailPage({ id }: { id: string }) {
 
               <p className="text-foreground mb-4 leading-relaxed">{q.questionText}</p>
 
+              {q.figureData && (
+                <div className="mb-4 rounded-lg border bg-white p-2">
+                  <img
+                    src={q.figureData}
+                    alt={`Question ${q.questionNumber} original PDF snippet`}
+                    className="max-h-[520px] w-full object-contain"
+                    loading="lazy"
+                  />
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {[
                   { label: "A", value: q.optionA },
