@@ -186,25 +186,55 @@ async function ocrImage(imagePath: string): Promise<string> {
   }
 }
 
-async function ocrFullPage(imagePath: string): Promise<string> {
+async function ocrFullPage(imagePath: string, outDir: string, index: number): Promise<string> {
+  const processedPath = path.join(outDir, `processed-${index}.png`);
+  const outBase = path.join(outDir, `ocr-out-${index}`);
+
   try {
-    const { stdout } = await execFileAsync(
+    // Preprocess: grayscale + slight contrast boost for better OCR
+    await execFileAsync("convert", [
+      imagePath,
+      "-colorspace", "Gray",
+      "-level", "10%,90%",
+      "-sharpen", "0x1",
+      processedPath,
+    ], { maxBuffer: 20 * 1024 * 1024 });
+  } catch {
+    // Use original if preprocessing fails
+    await execFileAsync("convert", [imagePath, processedPath], { maxBuffer: 20 * 1024 * 1024 }).catch(() => {});
+  }
+
+  const src = (await readFile(processedPath).catch(() => null)) ? processedPath : imagePath;
+
+  try {
+    // Use file output (faster than stdout), legacy OCR engine (oem 0 = fast, oem 1 = LSTM)
+    await execFileAsync(
       "tesseract",
-      [imagePath, "stdout", "--psm", "3", "--oem", "3", "-l", "eng"],
+      [src, outBase, "--psm", "3", "--oem", "1", "-l", "eng"],
       { maxBuffer: 10 * 1024 * 1024 }
     );
-    return typeof stdout === "string" ? stdout : String(stdout);
-  } catch (err) {
-    logger.warn({ err, imagePath }, "Full-page OCR failed");
-    return "";
+    return await readFile(`${outBase}.txt`, "utf8").catch(() => "");
+  } catch {
+    // LSTM failed, try legacy engine
+    try {
+      await execFileAsync(
+        "tesseract",
+        [src, outBase, "--psm", "3", "--oem", "0", "-l", "eng"],
+        { maxBuffer: 10 * 1024 * 1024 }
+      );
+      return await readFile(`${outBase}.txt`, "utf8").catch(() => "");
+    } catch (err) {
+      logger.warn({ err, imagePath }, "Full-page OCR failed for this page");
+      return "";
+    }
   }
 }
 
 async function extractTextViaOcr(pdfPath: string, tempDir: string): Promise<string> {
   const prefix = path.join(tempDir, "ocr-page");
 
-  // Render all pages at 300 DPI for good OCR quality
-  await execFileAsync("pdftoppm", ["-png", "-r", "300", pdfPath, prefix], {
+  // Render all pages at 200 DPI — good balance of quality vs speed
+  await execFileAsync("pdftoppm", ["-png", "-r", "200", pdfPath, prefix], {
     maxBuffer: 100 * 1024 * 1024,
   });
 
@@ -219,7 +249,12 @@ async function extractTextViaOcr(pdfPath: string, tempDir: string): Promise<stri
 
   logger.info({ pages: files.length }, "Running full-page OCR on scanned PDF");
 
-  const pageTexts = await Promise.all(files.map((f) => ocrFullPage(f)));
+  // Process pages sequentially to avoid memory spikes on large PDFs
+  const pageTexts: string[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const t = await ocrFullPage(files[i], tempDir, i);
+    pageTexts.push(t);
+  }
   return pageTexts.join("\n\f\n");
 }
 
@@ -339,11 +374,23 @@ async function extractQuestionVisuals(pdfPath: string, tempDir: string): Promise
 }
 
 function detectFormat(text: string): "format_2016" | "format_2025" | "unknown" {
+  // Direct text match (native PDF)
   if (text.includes("Chosen Option") && text.includes("Question ID")) {
+    return "format_2016";
+  }
+  // Fuzzy OCR match — OCR often garbles "Chosen" → "Chase", "Question" → "Questlon"/"oussnon"
+  const hasQuestionId = /Ques(?:t|ﬂ|fl)?(?:i|l|1)?on\s*ID/i.test(text) || /oussnon\s*ID/i.test(text) || /Question\s*ID/i.test(text);
+  const hasChosenOption = /Ch(?:o|0)s(?:e|en)\s*(?:Op)?(?:t|ﬂ)?(?:i|l)?on/i.test(text) || /Chosen\s*Option/i.test(text);
+  const hasStatus = /St(?:a|u)?(?:t|l)?us\s*:/i.test(text);
+  if (hasQuestionId && (hasChosenOption || hasStatus)) {
     return "format_2016";
   }
   if (text.includes("Section :") || text.match(/Q\.\d+\s+[A-Z]/)) {
     return "format_2025";
+  }
+  // Last resort: look for Q.N pattern which 2016 format always has
+  if ((text.match(/Q\.\d+/g) || []).length >= 3) {
+    return "format_2016";
   }
   return "unknown";
 }
@@ -622,24 +669,43 @@ export async function parsePdfText(pdfBuffer: Buffer): Promise<ParseResult> {
 
     let text = "";
     let usedOcr = false;
+
+    // Step 1: Try pdftotext
     try {
       text = await extractTextWithPdftotext(pdfPath);
-    } catch (err) {
-      logger.warn({ err }, "pdftotext extraction failed, falling back to pdf-parse");
+    } catch (pdftotextErr) {
+      logger.warn({ pdftotextErr }, "pdftotext failed");
+    }
+
+    // Step 2: If text too short (e.g. only page numbers), try pdf-parse
+    if (text.trim().length < 500) {
       try {
         const { createRequire } = await import("module");
         const require = createRequire(import.meta.url);
         const pdfParse = require("pdf-parse/lib/pdf-parse.js");
         const data = await pdfParse(pdfBuffer);
-        text = data.text;
+        if (data.text.trim().length > text.trim().length) {
+          text = data.text;
+          logger.info({ textLength: text.length }, "pdf-parse produced better text");
+        }
       } catch (parseErr) {
-        logger.warn({ parseErr }, "pdf-parse fallback failed, trying full-page OCR");
-        try {
-          text = await extractTextViaOcr(pdfPath, tempDir);
+        logger.warn({ parseErr }, "pdf-parse fallback failed");
+      }
+    }
+
+    // Step 3: If still not enough text, this is a scanned/image-based PDF — use full-page OCR
+    if (text.trim().length < 500) {
+      logger.info({ textLength: text.trim().length }, "Text too short, falling back to full-page OCR");
+      try {
+        const ocrText = await extractTextViaOcr(pdfPath, tempDir);
+        if (ocrText.trim().length > text.trim().length) {
+          text = ocrText;
           usedOcr = true;
           logger.info({ textLength: text.length }, "Full-page OCR extraction succeeded");
-        } catch (ocrErr) {
-          logger.warn({ ocrErr }, "Full-page OCR also failed");
+        }
+      } catch (ocrErr) {
+        logger.warn({ ocrErr }, "Full-page OCR also failed");
+        if (text.trim().length === 0) {
           throw new Error(
             "Could not extract text from this PDF even with OCR. The file may be password-protected or severely corrupted. " +
             "Please try: (1) opening and re-saving the PDF in Adobe Reader, (2) removing any password protection."
