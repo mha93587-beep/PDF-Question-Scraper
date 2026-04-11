@@ -42,7 +42,7 @@ const staticDir = process.env.STATIC_DIR
 
 if (fs.existsSync(staticDir)) {
   app.use(express.static(staticDir));
-  app.get("*", (_req, res) => {
+  app.get("/{*path}", (_req, res) => {
     const indexPath = path.join(staticDir, "index.html");
     if (fs.existsSync(indexPath)) {
       res.sendFile(indexPath);
