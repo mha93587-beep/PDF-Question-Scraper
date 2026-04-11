@@ -1,6 +1,6 @@
 import { logger } from "./logger";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -184,6 +184,43 @@ async function ocrImage(imagePath: string): Promise<string> {
     logger.warn({ err }, "OCR failed for PDF question crop");
     return "";
   }
+}
+
+async function ocrFullPage(imagePath: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync(
+      "tesseract",
+      [imagePath, "stdout", "--psm", "3", "--oem", "3", "-l", "eng"],
+      { maxBuffer: 10 * 1024 * 1024 }
+    );
+    return typeof stdout === "string" ? stdout : String(stdout);
+  } catch (err) {
+    logger.warn({ err, imagePath }, "Full-page OCR failed");
+    return "";
+  }
+}
+
+async function extractTextViaOcr(pdfPath: string, tempDir: string): Promise<string> {
+  const prefix = path.join(tempDir, "ocr-page");
+
+  // Render all pages at 300 DPI for good OCR quality
+  await execFileAsync("pdftoppm", ["-png", "-r", "300", pdfPath, prefix], {
+    maxBuffer: 100 * 1024 * 1024,
+  });
+
+  const files = (await readdir(tempDir))
+    .filter((f) => f.startsWith("ocr-page") && f.endsWith(".png"))
+    .sort()
+    .map((f) => path.join(tempDir, f));
+
+  if (files.length === 0) {
+    throw new Error("pdftoppm produced no page images");
+  }
+
+  logger.info({ pages: files.length }, "Running full-page OCR on scanned PDF");
+
+  const pageTexts = await Promise.all(files.map((f) => ocrFullPage(f)));
+  return pageTexts.join("\n\f\n");
 }
 
 async function renderQuestionVisual(
@@ -584,6 +621,7 @@ export async function parsePdfText(pdfBuffer: Buffer): Promise<ParseResult> {
     await writeFile(pdfPath, pdfBuffer);
 
     let text = "";
+    let usedOcr = false;
     try {
       text = await extractTextWithPdftotext(pdfPath);
     } catch (err) {
@@ -595,21 +633,30 @@ export async function parsePdfText(pdfBuffer: Buffer): Promise<ParseResult> {
         const data = await pdfParse(pdfBuffer);
         text = data.text;
       } catch (parseErr) {
-        logger.warn({ parseErr }, "pdf-parse fallback also failed");
-        throw new Error(
-          "Could not extract text from this PDF. The file may be password-protected, corrupted, or in an unsupported format. " +
-          "Please try: (1) opening and re-saving the PDF in Adobe Reader, (2) removing any password protection, or (3) using a different PDF export."
-        );
+        logger.warn({ parseErr }, "pdf-parse fallback failed, trying full-page OCR");
+        try {
+          text = await extractTextViaOcr(pdfPath, tempDir);
+          usedOcr = true;
+          logger.info({ textLength: text.length }, "Full-page OCR extraction succeeded");
+        } catch (ocrErr) {
+          logger.warn({ ocrErr }, "Full-page OCR also failed");
+          throw new Error(
+            "Could not extract text from this PDF even with OCR. The file may be password-protected or severely corrupted. " +
+            "Please try: (1) opening and re-saving the PDF in Adobe Reader, (2) removing any password protection."
+          );
+        }
       }
     }
 
-    logger.info({ textLength: text.length }, "PDF text extracted");
+    logger.info({ textLength: text.length, usedOcr }, "PDF text extracted");
 
     let visualsByQuestion = new Map<number, QuestionVisual>();
-    try {
-      visualsByQuestion = await extractQuestionVisuals(pdfPath, tempDir);
-    } catch (err) {
-      logger.warn({ err }, "PDF question image extraction failed");
+    if (!usedOcr) {
+      try {
+        visualsByQuestion = await extractQuestionVisuals(pdfPath, tempDir);
+      } catch (err) {
+        logger.warn({ err }, "PDF question image extraction failed");
+      }
     }
 
     const format = detectFormat(text);
