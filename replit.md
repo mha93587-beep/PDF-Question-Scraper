@@ -10,30 +10,30 @@ A full-stack web application that scrapes previous year question papers from PDF
 - **Node.js version**: 24
 - **Package manager**: pnpm
 - **TypeScript version**: 5.9
-- **API framework**: Express 5
+- **API framework**: Express 5 (Replit dev) / Hono on Cloudflare Pages Functions (CF deployment)
 - **Database**: PostgreSQL (Neon) + Drizzle ORM
 - **Frontend**: React + Vite + Tailwind CSS + shadcn/ui
-- **PDF Processing**: Poppler CLI (`pdftotext`, `pdftoppm`) with `pdf-parse` fallback
+- **PDF Processing**: Poppler CLI (`pdftotext`, `pdftoppm`) + OCR (Replit) / `unpdf` pure-JS (Cloudflare)
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
+- **Build**: esbuild (CJS bundle for Express)
 
 ## Architecture
 
 ### PDF Processing Pipeline
 1. **PDF Upload** - User uploads PDF via the web interface or processes pre-attached files
-2. **Text Extraction** - `pdftotext -layout` extracts raw text from PDF, with `pdf-parse` fallback
+2. **Text Extraction** - `pdftotext -layout` extracts raw text from PDF, with `pdf-parse` fallback (Replit) / `unpdf` (CF Pages)
 3. **Format Detection** - Auto-detects PDF format (2016 style vs 2025 style)
 4. **Question Parsing** - Regex-based parser extracts questions, options, answers
-5. **PDF Snippet Capture** - Each question is cropped from the original PDF and saved in `figureData` so math figures, formulas, and reasoning diagrams remain visible even when text extraction misses them
-6. **Database Storage** - All questions saved to PostgreSQL
+5. **Figure Capture** (Replit only) - Each question is cropped from the original PDF using pdftoppm + ImageMagick; watermarks removed via `-level 5%,78%`
+6. **Background Processing** - Upload returns immediately; extraction runs in background; frontend polls `/api/papers/:id` every 2s
 
 ### Supported PDF Formats
 - **Format 2016**: Questions with `Question ID`, `Status`, `Chosen Option` fields
 - **Format 2025**: Questions with direct `Q.N` numbering and `A./B./C./D.` options
 
 ### Database Schema
-- `papers` - Exam papers (exam name, year, shift, total questions)
+- `papers` - Exam papers (exam name, year, shift, total questions, processingStatus, processingError)
 - `questions` - Individual questions (text, options A-D, correct answer, figure flag, notes)
 
 ## Key Commands
@@ -41,15 +41,41 @@ A full-stack web application that scrapes previous year question papers from PDF
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- `pnpm --filter @workspace/api-server run dev` — run API server locally
+- `pnpm --filter @workspace/db run push` — push DB schema changes to Neon DB
+- `pnpm --filter @workspace/question-bank run build:cf` — build for Cloudflare Pages deployment
 
 ## Key Files
 
 - `lib/db/src/schema/questions.ts` — Database schema (papers + questions tables)
-- `artifacts/api-server/src/lib/pdf-parser.ts` — PDF text extraction and question parsing
-- `artifacts/api-server/src/routes/papers.ts` — API routes for upload, list, stats
+- `artifacts/api-server/src/lib/pdf-parser.ts` — PDF text extraction and question parsing (Replit/server)
+- `artifacts/api-server/src/routes/papers.ts` — Express API routes (Replit)
+- `artifacts/question-bank/functions/api/[[route]].ts` — Cloudflare Pages Function (CF deployment)
+- `artifacts/question-bank/wrangler.toml` — Cloudflare Pages config
+- `artifacts/question-bank/vite.config.cf.ts` — Vite config for CF Pages build
 - `artifacts/question-bank/src/` — React frontend (dashboard, upload, papers, questions)
 - `lib/api-spec/openapi.yaml` — API contract
+
+## Cloudflare Pages Deployment
+
+### Setup Steps
+1. Push code to a GitHub repo
+2. Go to Cloudflare Pages → Create a project → Connect GitHub repo
+3. **Build settings**:
+   - Root directory: `artifacts/question-bank`
+   - Build command: `npm install -g pnpm && pnpm install --frozen-lockfile && pnpm --filter @workspace/question-bank run build:cf`
+   - Output directory: `dist`
+4. **Environment variables** (in CF Pages dashboard → Settings → Environment variables):
+   - `NEON_DATABASE_URL` = your Neon PostgreSQL connection string
+5. Deploy!
+
+### CF vs Replit Differences
+| Feature | Replit (Dev) | Cloudflare Pages |
+|---------|-------------|-----------------|
+| PDF text extraction | `pdftotext` (Poppler) | `unpdf` (pure JS) |
+| Figure/image extraction | Yes (pdftoppm + ImageMagick + OCR) | **Not available** |
+| Process attached PDFs | Yes | **Not available** |
+| DB driver | `node-postgres` (persistent pool) | `@neondatabase/serverless` (HTTP) |
+| API framework | Express 5 | Hono |
+| Background processing | `setImmediate()` | `ctx.waitUntil()` |
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
