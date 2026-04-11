@@ -64,6 +64,40 @@ export const GetPaperResponse = zod.object({
 });
 
 /**
+ * @summary Delete a paper and all its questions
+ */
+export const DeletePaperParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const DeletePaperResponse = zod.object({
+  success: zod.boolean(),
+});
+
+/**
+ * @summary Update paper metadata
+ */
+export const UpdatePaperParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UpdatePaperBody = zod.object({
+  examName: zod.string().optional(),
+  year: zod.string().nullish(),
+  shift: zod.string().nullish(),
+});
+
+export const UpdatePaperResponse = zod.object({
+  id: zod.number(),
+  examName: zod.string(),
+  year: zod.string().nullish(),
+  shift: zod.string().nullish(),
+  totalQuestions: zod.number(),
+  fileName: zod.string().nullish(),
+  createdAt: zod.string().optional(),
+});
+
+/**
  * @summary Get questions for a paper
  */
 export const GetPaperQuestionsParams = zod.object({
@@ -122,6 +156,45 @@ export const ListQuestionsResponseItem = zod.object({
   createdAt: zod.string().optional(),
 });
 export const ListQuestionsResponse = zod.array(ListQuestionsResponseItem);
+
+/**
+ * @summary Update a question
+ */
+export const UpdateQuestionParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UpdateQuestionBody = zod.object({
+  questionText: zod.string().optional(),
+  optionA: zod.string().nullish(),
+  optionB: zod.string().nullish(),
+  optionC: zod.string().nullish(),
+  optionD: zod.string().nullish(),
+  correctAnswer: zod.string().nullish(),
+  figureData: zod.string().nullish(),
+  subject: zod.string().nullish(),
+  note: zod.string().nullish(),
+});
+
+export const UpdateQuestionResponse = zod.object({
+  id: zod.number(),
+  paperId: zod.number().nullish(),
+  questionNumber: zod.number(),
+  questionIdOriginal: zod.string().nullish(),
+  questionText: zod.string(),
+  optionA: zod.string().nullish(),
+  optionB: zod.string().nullish(),
+  optionC: zod.string().nullish(),
+  optionD: zod.string().nullish(),
+  correctAnswer: zod.string().nullish(),
+  chosenOption: zod.string().nullish(),
+  status: zod.string().nullish(),
+  hasFigure: zod.boolean().optional(),
+  figureData: zod.string().nullish(),
+  subject: zod.string().nullish(),
+  note: zod.string().nullish(),
+  createdAt: zod.string().optional(),
+});
 
 /**
  * @summary Get question details

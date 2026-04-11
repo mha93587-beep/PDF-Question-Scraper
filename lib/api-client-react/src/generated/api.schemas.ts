@@ -46,6 +46,24 @@ export interface UploadResult {
   message: string;
 }
 
+export interface UpdatePaperBody {
+  examName?: string;
+  year?: string | null;
+  shift?: string | null;
+}
+
+export interface UpdateQuestionBody {
+  questionText?: string;
+  optionA?: string | null;
+  optionB?: string | null;
+  optionC?: string | null;
+  optionD?: string | null;
+  correctAnswer?: string | null;
+  figureData?: string | null;
+  subject?: string | null;
+  note?: string | null;
+}
+
 export type QuestionStatsBySubjectItem = {
   subject?: string | null;
   count: number;
@@ -63,6 +81,10 @@ export type UploadPaperBody = {
   examName: string;
   year?: string;
   shift?: string;
+};
+
+export type DeletePaper200 = {
+  success: boolean;
 };
 
 export type ListQuestionsParams = {

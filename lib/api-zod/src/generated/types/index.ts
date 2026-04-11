@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./deletePaper200";
 export * from "./healthStatus";
 export * from "./listQuestionsParams";
 export * from "./paper";
@@ -13,5 +14,7 @@ export * from "./processAttachedPdfBody";
 export * from "./question";
 export * from "./questionStats";
 export * from "./questionStatsBySubjectItem";
+export * from "./updatePaperBody";
+export * from "./updateQuestionBody";
 export * from "./uploadPaperBody";
 export * from "./uploadResult";

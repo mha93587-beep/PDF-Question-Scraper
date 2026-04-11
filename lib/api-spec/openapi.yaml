@@ -91,6 +91,53 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Paper"
+  /papers/{id}/delete:
+    delete:
+      operationId: deletePaper
+      tags: [papers]
+      summary: Delete a paper and all its questions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                required:
+                  - success
+  /papers/{id}/update:
+    patch:
+      operationId: updatePaper
+      tags: [papers]
+      summary: Update paper metadata
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePaperBody"
+      responses:
+        "200":
+          description: Updated paper
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Paper"
   /papers/{id}/questions:
     get:
       operationId: getPaperQuestions
@@ -138,6 +185,30 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Question"
+  /questions/{id}/update:
+    patch:
+      operationId: updateQuestion
+      tags: [questions]
+      summary: Update a question
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateQuestionBody"
+      responses:
+        "200":
+          description: Updated question
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Question"
   /questions/{id}:
     get:
       operationId: getQuestion
@@ -299,6 +370,46 @@ components:
         - paperId
         - totalQuestions
         - message
+    UpdatePaperBody:
+      type: object
+      properties:
+        examName:
+          type: string
+        year:
+          type: string
+          nullable: true
+        shift:
+          type: string
+          nullable: true
+    UpdateQuestionBody:
+      type: object
+      properties:
+        questionText:
+          type: string
+        optionA:
+          type: string
+          nullable: true
+        optionB:
+          type: string
+          nullable: true
+        optionC:
+          type: string
+          nullable: true
+        optionD:
+          type: string
+          nullable: true
+        correctAnswer:
+          type: string
+          nullable: true
+        figureData:
+          type: string
+          nullable: true
+        subject:
+          type: string
+          nullable: true
+        note:
+          type: string
+          nullable: true
     QuestionStats:
       type: object
       properties:

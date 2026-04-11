@@ -211,6 +211,55 @@ router.get("/questions", async (req, res): Promise<void> => {
   res.json(questions);
 });
 
+router.patch("/papers/:id/update", async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(raw, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid paper ID" }); return; }
+
+  const { examName, year, shift } = req.body;
+  const updates: Record<string, unknown> = {};
+  if (examName !== undefined) updates.examName = examName;
+  if (year !== undefined) updates.year = year || null;
+  if (shift !== undefined) updates.shift = shift || null;
+
+  const [updated] = await db.update(papersTable).set(updates).where(eq(papersTable.id, id)).returning();
+  if (!updated) { res.status(404).json({ error: "Paper not found" }); return; }
+  res.json(updated);
+});
+
+router.delete("/papers/:id/delete", async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(raw, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid paper ID" }); return; }
+
+  await db.delete(questionsTable).where(eq(questionsTable.paperId, id));
+  const [deleted] = await db.delete(papersTable).where(eq(papersTable.id, id)).returning();
+  if (!deleted) { res.status(404).json({ error: "Paper not found" }); return; }
+  res.json({ success: true });
+});
+
+router.patch("/questions/:id/update", async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(raw, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid question ID" }); return; }
+
+  const { questionText, optionA, optionB, optionC, optionD, correctAnswer, figureData, subject, note } = req.body;
+  const updates: Record<string, unknown> = {};
+  if (questionText !== undefined) updates.questionText = questionText;
+  if (optionA !== undefined) updates.optionA = optionA || null;
+  if (optionB !== undefined) updates.optionB = optionB || null;
+  if (optionC !== undefined) updates.optionC = optionC || null;
+  if (optionD !== undefined) updates.optionD = optionD || null;
+  if (correctAnswer !== undefined) updates.correctAnswer = correctAnswer || null;
+  if (figureData !== undefined) updates.figureData = figureData || null;
+  if (subject !== undefined) updates.subject = subject || null;
+  if (note !== undefined) updates.note = note || null;
+
+  const [updated] = await db.update(questionsTable).set(updates).where(eq(questionsTable.id, id)).returning();
+  if (!updated) { res.status(404).json({ error: "Question not found" }); return; }
+  res.json(updated);
+});
+
 router.get("/questions/stats", async (_req, res): Promise<void> => {
   const [paperCount] = await db.select({ count: count() }).from(papersTable);
   const [questionCount] = await db.select({ count: count() }).from(questionsTable);

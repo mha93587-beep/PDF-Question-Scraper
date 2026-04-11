@@ -17,12 +17,15 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  DeletePaper200,
   HealthStatus,
   ListQuestionsParams,
   Paper,
   ProcessAttachedPdfBody,
   Question,
   QuestionStats,
+  UpdatePaperBody,
+  UpdateQuestionBody,
   UploadPaperBody,
   UploadResult,
 } from "./api.schemas";
@@ -366,6 +369,177 @@ export function useGetPaper<
 }
 
 /**
+ * @summary Delete a paper and all its questions
+ */
+export const getDeletePaperUrl = (id: number) => {
+  return `/api/papers/${id}/delete`;
+};
+
+export const deletePaper = async (
+  id: number,
+  options?: RequestInit,
+): Promise<DeletePaper200> => {
+  return customFetch<DeletePaper200>(getDeletePaperUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeletePaperMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deletePaper>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deletePaper>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["deletePaper"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deletePaper>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deletePaper(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeletePaperMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deletePaper>>
+>;
+
+export type DeletePaperMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Delete a paper and all its questions
+ */
+export const useDeletePaper = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deletePaper>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deletePaper>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getDeletePaperMutationOptions(options));
+};
+
+/**
+ * @summary Update paper metadata
+ */
+export const getUpdatePaperUrl = (id: number) => {
+  return `/api/papers/${id}/update`;
+};
+
+export const updatePaper = async (
+  id: number,
+  updatePaperBody: UpdatePaperBody,
+  options?: RequestInit,
+): Promise<Paper> => {
+  return customFetch<Paper>(getUpdatePaperUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updatePaperBody),
+  });
+};
+
+export const getUpdatePaperMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updatePaper>>,
+    TError,
+    { id: number; data: BodyType<UpdatePaperBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updatePaper>>,
+  TError,
+  { id: number; data: BodyType<UpdatePaperBody> },
+  TContext
+> => {
+  const mutationKey = ["updatePaper"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updatePaper>>,
+    { id: number; data: BodyType<UpdatePaperBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updatePaper(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdatePaperMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updatePaper>>
+>;
+export type UpdatePaperMutationBody = BodyType<UpdatePaperBody>;
+export type UpdatePaperMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update paper metadata
+ */
+export const useUpdatePaper = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updatePaper>>,
+    TError,
+    { id: number; data: BodyType<UpdatePaperBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updatePaper>>,
+  TError,
+  { id: number; data: BodyType<UpdatePaperBody> },
+  TContext
+> => {
+  return useMutation(getUpdatePaperMutationOptions(options));
+};
+
+/**
  * @summary Get questions for a paper
  */
 export const getGetPaperQuestionsUrl = (id: number) => {
@@ -545,6 +719,93 @@ export function useListQuestions<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Update a question
+ */
+export const getUpdateQuestionUrl = (id: number) => {
+  return `/api/questions/${id}/update`;
+};
+
+export const updateQuestion = async (
+  id: number,
+  updateQuestionBody: UpdateQuestionBody,
+  options?: RequestInit,
+): Promise<Question> => {
+  return customFetch<Question>(getUpdateQuestionUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateQuestionBody),
+  });
+};
+
+export const getUpdateQuestionMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateQuestion>>,
+    TError,
+    { id: number; data: BodyType<UpdateQuestionBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateQuestion>>,
+  TError,
+  { id: number; data: BodyType<UpdateQuestionBody> },
+  TContext
+> => {
+  const mutationKey = ["updateQuestion"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateQuestion>>,
+    { id: number; data: BodyType<UpdateQuestionBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateQuestion(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateQuestionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateQuestion>>
+>;
+export type UpdateQuestionMutationBody = BodyType<UpdateQuestionBody>;
+export type UpdateQuestionMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update a question
+ */
+export const useUpdateQuestion = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateQuestion>>,
+    TError,
+    { id: number; data: BodyType<UpdateQuestionBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateQuestion>>,
+  TError,
+  { id: number; data: BodyType<UpdateQuestionBody> },
+  TContext
+> => {
+  return useMutation(getUpdateQuestionMutationOptions(options));
+};
 
 /**
  * @summary Get question details
