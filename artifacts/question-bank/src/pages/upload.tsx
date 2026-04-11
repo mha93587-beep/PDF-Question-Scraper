@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useUploadPaper, useProcessAttachedPdf, getListPapersQueryKey, getGetQuestionStatsQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -6,34 +6,122 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { Upload, FileText, Loader2, CheckCircle2 } from "lucide-react";
+import { Upload, FileText, Loader2, CheckCircle2, AlertCircle, Clock } from "lucide-react";
+
+type ProcessingState = {
+  paperId: number;
+  status: "processing" | "done" | "error";
+  totalQuestions?: number;
+  errorMessage?: string;
+  elapsedSeconds: number;
+};
+
+function useProcessingPoller(
+  paperId: number | null,
+  onDone: (totalQuestions: number) => void,
+  onError: (msg: string) => void
+) {
+  const [state, setState] = useState<ProcessingState | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTimeRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (!paperId) {
+      setState(null);
+      return;
+    }
+
+    startTimeRef.current = Date.now();
+    setState({ paperId, status: "processing", elapsedSeconds: 0 });
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/papers/${paperId}`);
+        if (!res.ok) return;
+        const paper = await res.json();
+        const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
+
+        if (paper.processingStatus === "done") {
+          setState({ paperId, status: "done", totalQuestions: paper.totalQuestions, elapsedSeconds: elapsed });
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          onDone(paper.totalQuestions);
+        } else if (paper.processingStatus === "error") {
+          setState({ paperId, status: "error", errorMessage: paper.processingError, elapsedSeconds: elapsed });
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          onError(paper.processingError || "Processing failed");
+        } else {
+          setState((prev) => prev ? { ...prev, elapsedSeconds: elapsed } : null);
+        }
+      } catch {
+        // network error, keep polling
+      }
+    };
+
+    intervalRef.current = setInterval(poll, 2000);
+    poll();
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [paperId]);
+
+  return state;
+}
 
 export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [examName, setExamName] = useState("");
   const [year, setYear] = useState("");
   const [shift, setShift] = useState("");
+  const [activePaperId, setActivePaperId] = useState<number | null>(null);
+  const [attachedPaperId, setAttachedPaperId] = useState<number | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: getListPapersQueryKey() });
+    queryClient.invalidateQueries({ queryKey: getGetQuestionStatsQueryKey() });
+  };
+
+  const uploadState = useProcessingPoller(
+    activePaperId,
+    (totalQuestions) => {
+      toast({ title: "PDF Extracted!", description: `Successfully extracted ${totalQuestions} questions.` });
+      setFile(null);
+      setExamName("");
+      setYear("");
+      setShift("");
+      setActivePaperId(null);
+      invalidateAll();
+    },
+    (msg) => {
+      toast({ title: "Extraction Failed", description: msg, variant: "destructive" });
+      setActivePaperId(null);
+    }
+  );
+
+  const attachedState = useProcessingPoller(
+    attachedPaperId,
+    (totalQuestions) => {
+      toast({ title: "Attached PDF Extracted!", description: `Successfully extracted ${totalQuestions} questions.` });
+      setAttachedPaperId(null);
+      invalidateAll();
+    },
+    (msg) => {
+      toast({ title: "Processing Failed", description: msg, variant: "destructive" });
+      setAttachedPaperId(null);
+    }
+  );
 
   const uploadMutation = useUploadPaper({
     mutation: {
       onSuccess: (data) => {
-        toast({
-          title: "PDF Processed Successfully",
-          description: data.message,
-        });
-        setFile(null);
-        setExamName("");
-        setYear("");
-        setShift("");
-        queryClient.invalidateQueries({ queryKey: getListPapersQueryKey() });
-        queryClient.invalidateQueries({ queryKey: getGetQuestionStatsQueryKey() });
+        setActivePaperId(data.paperId);
       },
       onError: () => {
         toast({
           title: "Upload Failed",
-          description: "Failed to process the PDF. Please try again.",
+          description: "Failed to upload the PDF. Please try again.",
           variant: "destructive",
         });
       },
@@ -43,17 +131,12 @@ export default function UploadPage() {
   const processAttachedMutation = useProcessAttachedPdf({
     mutation: {
       onSuccess: (data) => {
-        toast({
-          title: "Attached PDF Processed",
-          description: data.message,
-        });
-        queryClient.invalidateQueries({ queryKey: getListPapersQueryKey() });
-        queryClient.invalidateQueries({ queryKey: getGetQuestionStatsQueryKey() });
+        setAttachedPaperId(data.paperId);
       },
       onError: () => {
         toast({
           title: "Processing Failed",
-          description: "Failed to process the attached PDF.",
+          description: "Failed to start processing the attached PDF.",
           variant: "destructive",
         });
       },
@@ -72,6 +155,9 @@ export default function UploadPage() {
     });
   };
 
+  const isUploadBusy = uploadMutation.isPending || uploadState?.status === "processing";
+  const isAttachedBusy = processAttachedMutation.isPending || attachedState?.status === "processing";
+
   const attachedPdfs = [
     {
       name: "RRB NTPC CBT-I 2016 Shift 3",
@@ -82,6 +168,11 @@ export default function UploadPage() {
       path: "attached_assets/RRB-NTPC-Graduate-2025-CBT-I-Question-Paper-\u201316-03-2026\u2013S1-1-1_1775882437102.pdf",
     },
   ];
+
+  function formatTime(secs: number) {
+    if (secs < 60) return `${secs}s`;
+    return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  }
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -105,8 +196,9 @@ export default function UploadPage() {
                 accept=".pdf"
                 className="hidden"
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
+                disabled={isUploadBusy}
               />
-              <label htmlFor="file" className="cursor-pointer flex flex-col items-center gap-3">
+              <label htmlFor="file" className={`cursor-pointer flex flex-col items-center gap-3 ${isUploadBusy ? "opacity-50 cursor-not-allowed" : ""}`}>
                 {file ? (
                   <>
                     <FileText className="w-10 h-10 text-primary" />
@@ -132,6 +224,7 @@ export default function UploadPage() {
                 placeholder="e.g. RRB NTPC CBT-I 2025"
                 value={examName}
                 onChange={(e) => setExamName(e.target.value)}
+                disabled={isUploadBusy}
               />
             </div>
             <div className="space-y-2">
@@ -141,6 +234,7 @@ export default function UploadPage() {
                 placeholder="e.g. 2025"
                 value={year}
                 onChange={(e) => setYear(e.target.value)}
+                disabled={isUploadBusy}
               />
             </div>
             <div className="space-y-2">
@@ -150,20 +244,26 @@ export default function UploadPage() {
                 placeholder="e.g. Shift 1"
                 value={shift}
                 onChange={(e) => setShift(e.target.value)}
+                disabled={isUploadBusy}
               />
             </div>
           </div>
 
           <Button
             onClick={handleUpload}
-            disabled={!file || !examName || uploadMutation.isPending}
+            disabled={!file || !examName || isUploadBusy}
             className="w-full"
             size="lg"
           >
             {uploadMutation.isPending ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Processing PDF...
+                Uploading...
+              </>
+            ) : uploadState?.status === "processing" ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Extracting questions... ({formatTime(uploadState.elapsedSeconds)})
               </>
             ) : (
               <>
@@ -173,10 +273,29 @@ export default function UploadPage() {
             )}
           </Button>
 
-          {uploadMutation.isSuccess && (
+          {uploadState?.status === "processing" && (
+            <div className="flex items-start gap-3 p-4 bg-blue-50 border border-blue-200 rounded-lg text-blue-800">
+              <Clock className="w-5 h-5 mt-0.5 shrink-0 animate-pulse" />
+              <div>
+                <p className="font-medium">Extracting questions in background</p>
+                <p className="text-sm mt-0.5 text-blue-700">
+                  PDF parsing, figure detection, and OCR are running on the server. This typically takes 1–3 minutes for a 100-question paper. Please wait...
+                </p>
+              </div>
+            </div>
+          )}
+
+          {uploadState?.status === "done" && (
             <div className="flex items-center gap-2 p-4 bg-green-50 border border-green-200 rounded-lg text-green-800">
               <CheckCircle2 className="w-5 h-5" />
-              <span>{uploadMutation.data.message}</span>
+              <span>Successfully extracted {uploadState.totalQuestions} questions in {formatTime(uploadState.elapsedSeconds)}!</span>
+            </div>
+          )}
+
+          {uploadState?.status === "error" && (
+            <div className="flex items-center gap-2 p-4 bg-red-50 border border-red-200 rounded-lg text-red-800">
+              <AlertCircle className="w-5 h-5" />
+              <span>Extraction failed: {uploadState.errorMessage}</span>
             </div>
           )}
         </CardContent>
@@ -198,7 +317,7 @@ export default function UploadPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={processAttachedMutation.isPending}
+                  disabled={isAttachedBusy}
                   onClick={() => {
                     processAttachedMutation.mutate({
                       id: 0,
@@ -206,14 +325,34 @@ export default function UploadPage() {
                     });
                   }}
                 >
-                  {processAttachedMutation.isPending ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                  {isAttachedBusy ? (
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      {attachedState?.status === "processing" ? formatTime(attachedState.elapsedSeconds) : "Starting..."}
+                    </span>
                   ) : (
                     "Process"
                   )}
                 </Button>
               </div>
             ))}
+
+            {attachedState?.status === "processing" && (
+              <div className="flex items-start gap-3 p-4 bg-blue-50 border border-blue-200 rounded-lg text-blue-800">
+                <Clock className="w-5 h-5 mt-0.5 shrink-0 animate-pulse" />
+                <div>
+                  <p className="font-medium">Processing attached PDF...</p>
+                  <p className="text-sm mt-0.5 text-blue-700">Extraction running in background. Elapsed: {formatTime(attachedState.elapsedSeconds)}</p>
+                </div>
+              </div>
+            )}
+
+            {attachedState?.status === "done" && (
+              <div className="flex items-center gap-2 p-4 bg-green-50 border border-green-200 rounded-lg text-green-800">
+                <CheckCircle2 className="w-5 h-5" />
+                <span>Done! Extracted {attachedState.totalQuestions} questions in {formatTime(attachedState.elapsedSeconds)}.</span>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

@@ -6,6 +6,7 @@ import { eq, sql, count } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { papersTable, questionsTable } from "@workspace/db/schema";
 import { parsePdfText } from "../lib/pdf-parser";
+import { logger } from "../lib/logger";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -29,6 +30,44 @@ function resolveWorkspacePath(filePath: string): string {
   return path.resolve(process.cwd(), "../..", filePath);
 }
 
+async function processPdfAndSave(paperId: number, pdfBuffer: Buffer, fileName: string): Promise<void> {
+  try {
+    const result = await parsePdfText(pdfBuffer);
+
+    if (result.questions.length > 0) {
+      await db.insert(questionsTable).values(
+        result.questions.map((q) => ({
+          paperId,
+          questionNumber: q.questionNumber,
+          questionIdOriginal: q.questionIdOriginal,
+          questionText: q.questionText,
+          optionA: q.optionA,
+          optionB: q.optionB,
+          optionC: q.optionC,
+          optionD: q.optionD,
+          correctAnswer: q.correctAnswer,
+          chosenOption: q.chosenOption,
+          status: q.status,
+          hasFigure: q.hasFigure,
+          figureData: q.figureData,
+          note: q.note,
+        }))
+      );
+    }
+
+    await db.update(papersTable)
+      .set({ totalQuestions: result.questions.length, processingStatus: "done" })
+      .where(eq(papersTable.id, paperId));
+
+    logger.info({ paperId, totalQuestions: result.questions.length }, "Paper processed successfully");
+  } catch (err) {
+    logger.error({ err, paperId }, "PDF processing failed");
+    await db.update(papersTable)
+      .set({ processingStatus: "error", processingError: String(err) })
+      .where(eq(papersTable.id, paperId));
+  }
+}
+
 router.post("/papers/upload", upload.single("file"), async (req, res): Promise<void> => {
   if (!req.file) {
     res.status(400).json({ error: "No file uploaded" });
@@ -43,44 +82,26 @@ router.post("/papers/upload", upload.single("file"), async (req, res): Promise<v
 
   req.log.info({ fileName: req.file.originalname }, "Processing PDF upload");
 
-  const result = await parsePdfText(req.file.buffer);
-
   const [paper] = await db.insert(papersTable).values({
-    examName: examName || result.examName,
+    examName,
     year: year || null,
     shift: shift || null,
-    totalQuestions: result.questions.length,
+    totalQuestions: 0,
     fileName: req.file.originalname,
+    processingStatus: "processing",
   }).returning();
 
-  if (result.questions.length > 0) {
-    await db.insert(questionsTable).values(
-      result.questions.map((q) => ({
-        paperId: paper.id,
-        questionNumber: q.questionNumber,
-        questionIdOriginal: q.questionIdOriginal,
-        questionText: q.questionText,
-        optionA: q.optionA,
-        optionB: q.optionB,
-        optionC: q.optionC,
-        optionD: q.optionD,
-        correctAnswer: q.correctAnswer,
-        chosenOption: q.chosenOption,
-        status: q.status,
-        hasFigure: q.hasFigure,
-        figureData: q.figureData,
-        note: q.note,
-      }))
-    );
-  }
-
-  req.log.info({ paperId: paper.id, totalQuestions: result.questions.length }, "Paper processed");
+  const fileBuffer = req.file.buffer;
+  setImmediate(() => {
+    processPdfAndSave(paper.id, fileBuffer, req.file!.originalname);
+  });
 
   res.json({
     success: true,
     paperId: paper.id,
-    totalQuestions: result.questions.length,
-    message: `Successfully extracted ${result.questions.length} questions from ${req.file.originalname}`,
+    processing: true,
+    totalQuestions: 0,
+    message: `PDF uploaded successfully. Extracting questions in background...`,
   });
 });
 
@@ -102,81 +123,36 @@ router.post("/papers/:id/process-attached", async (req, res): Promise<void> => {
   req.log.info({ filePath }, "Processing attached PDF");
 
   const buffer = await readFile(resolveWorkspacePath(filePath));
-  const result = await parsePdfText(buffer);
-
   const attachedFileName = filePath.split("/").pop() || "attached.pdf";
-  const [paper] = paperId > 0
-    ? await db.select().from(papersTable).where(eq(papersTable.id, paperId))
-    : await db.select().from(papersTable).where(eq(papersTable.fileName, attachedFileName));
+
+  let paper = (await db.select().from(papersTable).where(eq(papersTable.fileName, attachedFileName)))[0];
 
   if (!paper) {
-    const examName = result.examName || "Unknown Exam";
     const [newPaper] = await db.insert(papersTable).values({
-      examName,
-      totalQuestions: result.questions.length,
+      examName: "Processing...",
+      totalQuestions: 0,
       fileName: attachedFileName,
+      processingStatus: "processing",
     }).returning();
-
-    if (result.questions.length > 0) {
-      await db.insert(questionsTable).values(
-        result.questions.map((q) => ({
-          paperId: newPaper.id,
-          questionNumber: q.questionNumber,
-          questionIdOriginal: q.questionIdOriginal,
-          questionText: q.questionText,
-          optionA: q.optionA,
-          optionB: q.optionB,
-          optionC: q.optionC,
-          optionD: q.optionD,
-          correctAnswer: q.correctAnswer,
-          chosenOption: q.chosenOption,
-          status: q.status,
-          hasFigure: q.hasFigure,
-          figureData: q.figureData,
-          note: q.note,
-        }))
-      );
-    }
-
-    res.json({
-      success: true,
-      paperId: newPaper.id,
-      totalQuestions: result.questions.length,
-      message: `Extracted ${result.questions.length} questions`,
-    });
-    return;
+    paper = newPaper;
+  } else {
+    await db.update(papersTable)
+      .set({ processingStatus: "processing", totalQuestions: 0 })
+      .where(eq(papersTable.id, paper.id));
+    await db.delete(questionsTable).where(eq(questionsTable.paperId, paper.id));
   }
 
-  await db.delete(questionsTable).where(eq(questionsTable.paperId, paper.id));
-
-  if (result.questions.length > 0) {
-    await db.insert(questionsTable).values(
-      result.questions.map((q) => ({
-        paperId: paper.id,
-        questionNumber: q.questionNumber,
-        questionIdOriginal: q.questionIdOriginal,
-        questionText: q.questionText,
-        optionA: q.optionA,
-        optionB: q.optionB,
-        optionC: q.optionC,
-        optionD: q.optionD,
-        correctAnswer: q.correctAnswer,
-        chosenOption: q.chosenOption,
-        status: q.status,
-        hasFigure: q.hasFigure,
-        figureData: q.figureData,
-        note: q.note,
-      }))
-    );
-  }
-
-  await db.update(papersTable).set({ totalQuestions: result.questions.length }).where(eq(papersTable.id, paper.id));
+  const paperId2 = paper.id;
+  setImmediate(() => {
+    processPdfAndSave(paperId2, buffer, attachedFileName);
+  });
 
   res.json({
     success: true,
     paperId: paper.id,
-    totalQuestions: result.questions.length,
-    message: `Extracted ${result.questions.length} questions`,
+    processing: true,
+    totalQuestions: 0,
+    message: `PDF queued for processing. Questions will be extracted shortly.`,
   });
 });
 
