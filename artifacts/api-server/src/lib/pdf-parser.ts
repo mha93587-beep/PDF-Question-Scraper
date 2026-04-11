@@ -660,7 +660,10 @@ function parse2025Format(text: string, visualsByQuestion: Map<number, QuestionVi
   return questions;
 }
 
-export async function parsePdfText(pdfBuffer: Buffer): Promise<ParseResult> {
+export async function parsePdfText(
+  pdfBuffer: Buffer,
+  onStage?: (stage: string) => Promise<void>
+): Promise<ParseResult> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "question-bank-pdf-"));
   const pdfPath = path.join(tempDir, "paper.pdf");
 
@@ -671,6 +674,7 @@ export async function parsePdfText(pdfBuffer: Buffer): Promise<ParseResult> {
     let usedOcr = false;
 
     // Step 1: Try pdftotext
+    await onStage?.("pdftotext");
     try {
       text = await extractTextWithPdftotext(pdfPath);
     } catch (pdftotextErr) {
@@ -679,6 +683,7 @@ export async function parsePdfText(pdfBuffer: Buffer): Promise<ParseResult> {
 
     // Step 2: If text too short (e.g. only page numbers), try pdf-parse
     if (text.trim().length < 500) {
+      await onStage?.("pdf_parse");
       try {
         const { createRequire } = await import("module");
         const require = createRequire(import.meta.url);
@@ -695,6 +700,7 @@ export async function parsePdfText(pdfBuffer: Buffer): Promise<ParseResult> {
 
     // Step 3: If still not enough text, this is a scanned/image-based PDF — use full-page OCR
     if (text.trim().length < 500) {
+      await onStage?.("ocr");
       logger.info({ textLength: text.trim().length }, "Text too short, falling back to full-page OCR");
       try {
         const ocrText = await extractTextViaOcr(pdfPath, tempDir);
@@ -713,6 +719,8 @@ export async function parsePdfText(pdfBuffer: Buffer): Promise<ParseResult> {
         }
       }
     }
+
+    await onStage?.("parsing_questions");
 
     logger.info({ textLength: text.length, usedOcr }, "PDF text extracted");
 

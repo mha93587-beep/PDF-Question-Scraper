@@ -30,9 +30,14 @@ function resolveWorkspacePath(filePath: string): string {
   return path.resolve(process.cwd(), "../..", filePath);
 }
 
+async function setStage(paperId: number, stage: string) {
+  await db.update(papersTable).set({ processingStage: stage }).where(eq(papersTable.id, paperId));
+}
+
 async function processPdfAndSave(paperId: number, pdfBuffer: Buffer, fileName: string): Promise<void> {
   try {
-    const result = await parsePdfText(pdfBuffer);
+    await setStage(paperId, "extracting_text");
+    const result = await parsePdfText(pdfBuffer, (stage) => setStage(paperId, stage));
 
     if (result.questions.length > 0) {
       await db.insert(questionsTable).values(
@@ -56,7 +61,7 @@ async function processPdfAndSave(paperId: number, pdfBuffer: Buffer, fileName: s
     }
 
     await db.update(papersTable)
-      .set({ totalQuestions: result.questions.length, processingStatus: "done" })
+      .set({ totalQuestions: result.questions.length, processingStatus: "done", processingStage: null })
       .where(eq(papersTable.id, paperId));
 
     logger.info({ paperId, totalQuestions: result.questions.length }, "Paper processed successfully");

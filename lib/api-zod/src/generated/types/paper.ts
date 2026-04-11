@@ -13,5 +13,8 @@ export interface Paper {
   shift?: string | null;
   totalQuestions: number;
   fileName?: string | null;
+  processingStatus?: string | null;
+  processingStage?: string | null;
+  processingError?: string | null;
   createdAt?: string;
 }

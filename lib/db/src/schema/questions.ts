@@ -10,6 +10,7 @@ export const papersTable = pgTable("papers", {
   totalQuestions: integer("total_questions").default(0),
   fileName: text("file_name"),
   processingStatus: text("processing_status").default("done"),
+  processingStage: text("processing_stage"),
   processingError: text("processing_error"),
   createdAt: timestamp("created_at").defaultNow(),
 });

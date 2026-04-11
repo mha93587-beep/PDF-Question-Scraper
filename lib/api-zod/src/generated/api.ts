@@ -42,6 +42,9 @@ export const ListPapersResponseItem = zod.object({
   shift: zod.string().nullish(),
   totalQuestions: zod.number(),
   fileName: zod.string().nullish(),
+  processingStatus: zod.string().nullish(),
+  processingStage: zod.string().nullish(),
+  processingError: zod.string().nullish(),
   createdAt: zod.string().optional(),
 });
 export const ListPapersResponse = zod.array(ListPapersResponseItem);
@@ -60,6 +63,9 @@ export const GetPaperResponse = zod.object({
   shift: zod.string().nullish(),
   totalQuestions: zod.number(),
   fileName: zod.string().nullish(),
+  processingStatus: zod.string().nullish(),
+  processingStage: zod.string().nullish(),
+  processingError: zod.string().nullish(),
   createdAt: zod.string().optional(),
 });
 
@@ -94,6 +100,9 @@ export const UpdatePaperResponse = zod.object({
   shift: zod.string().nullish(),
   totalQuestions: zod.number(),
   fileName: zod.string().nullish(),
+  processingStatus: zod.string().nullish(),
+  processingStage: zod.string().nullish(),
+  processingError: zod.string().nullish(),
   createdAt: zod.string().optional(),
 });
 

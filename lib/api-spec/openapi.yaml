@@ -295,6 +295,15 @@ components:
         fileName:
           type: string
           nullable: true
+        processingStatus:
+          type: string
+          nullable: true
+        processingStage:
+          type: string
+          nullable: true
+        processingError:
+          type: string
+          nullable: true
         createdAt:
           type: string
       required:
