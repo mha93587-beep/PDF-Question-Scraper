@@ -62,12 +62,14 @@ export default function UploadPage() {
 
   const handleUpload = () => {
     if (!file || !examName) return;
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("examName", examName);
-    if (year) formData.append("year", year);
-    if (shift) formData.append("shift", shift);
-    uploadMutation.mutate({ data: formData as any });
+    uploadMutation.mutate({
+      data: {
+        file,
+        examName,
+        ...(year ? { year } : {}),
+        ...(shift ? { shift } : {}),
+      },
+    });
   };
 
   const attachedPdfs = [
