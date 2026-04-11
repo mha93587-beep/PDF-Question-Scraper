@@ -188,6 +188,8 @@ async function renderQuestionVisual(
       "off",
       "-colorspace",
       "Gray",
+      "-level",
+      "5%,78%",
       "-sharpen",
       "0x1",
       cropPath,
