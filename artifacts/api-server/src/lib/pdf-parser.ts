@@ -132,10 +132,46 @@ function runBinary(command: string, args: string[]): Promise<Buffer> {
 
 async function extractTextWithPdftotext(pdfPath: string): Promise<string> {
   const outputPath = `${pdfPath}.txt`;
-  await execFileAsync("pdftotext", ["-layout", "-enc", "UTF-8", pdfPath, outputPath], {
-    maxBuffer: 30 * 1024 * 1024,
-  });
-  return readFile(outputPath, "utf8");
+
+  // Try with -layout flag first; pdftotext may still write output even on non-zero exit
+  try {
+    await execFileAsync("pdftotext", ["-layout", "-enc", "UTF-8", pdfPath, outputPath], {
+      maxBuffer: 30 * 1024 * 1024,
+    });
+  } catch {
+    // Non-zero exit (e.g. "Document stream is empty" warning); still try reading the file
+  }
+
+  try {
+    const text = await readFile(outputPath, "utf8");
+    if (text.trim().length > 50) {
+      return text;
+    }
+  } catch {
+    // Output file was not written
+  }
+
+  // Retry without -layout (works better for some PDFs)
+  const outputPath2 = `${pdfPath}-plain.txt`;
+  try {
+    await execFileAsync("pdftotext", ["-enc", "UTF-8", pdfPath, outputPath2], {
+      maxBuffer: 30 * 1024 * 1024,
+    });
+  } catch {
+    // Still attempt to read
+  }
+
+  try {
+    const text = await readFile(outputPath2, "utf8");
+    if (text.trim().length > 50) {
+      logger.info("Used pdftotext without -layout flag (fallback)");
+      return text;
+    }
+  } catch {
+    // Output file not written
+  }
+
+  throw new Error("pdftotext failed to extract any text from this PDF");
 }
 
 async function ocrImage(imagePath: string): Promise<string> {
@@ -552,11 +588,19 @@ export async function parsePdfText(pdfBuffer: Buffer): Promise<ParseResult> {
       text = await extractTextWithPdftotext(pdfPath);
     } catch (err) {
       logger.warn({ err }, "pdftotext extraction failed, falling back to pdf-parse");
-      const { createRequire } = await import("module");
-      const require = createRequire(import.meta.url);
-      const pdfParse = require("pdf-parse/lib/pdf-parse.js");
-      const data = await pdfParse(pdfBuffer);
-      text = data.text;
+      try {
+        const { createRequire } = await import("module");
+        const require = createRequire(import.meta.url);
+        const pdfParse = require("pdf-parse/lib/pdf-parse.js");
+        const data = await pdfParse(pdfBuffer);
+        text = data.text;
+      } catch (parseErr) {
+        logger.warn({ parseErr }, "pdf-parse fallback also failed");
+        throw new Error(
+          "Could not extract text from this PDF. The file may be password-protected, corrupted, or in an unsupported format. " +
+          "Please try: (1) opening and re-saving the PDF in Adobe Reader, (2) removing any password protection, or (3) using a different PDF export."
+        );
+      }
     }
 
     logger.info({ textLength: text.length }, "PDF text extracted");
