@@ -128,6 +128,21 @@ export class B2StorageService {
     }
   }
 
+  async uploadBuffer(key: string, buffer: Buffer, contentType: string): Promise<string> {
+    const config = this.getConfig();
+    const client = this.getClient(config);
+    await client.send(
+      new PutObjectCommand({
+        Bucket: config.bucket,
+        Key: key,
+        Body: buffer,
+        ContentType: contentType,
+        ContentLength: buffer.length,
+      })
+    );
+    return this.toObjectPath(key);
+  }
+
   async deleteObject(objectPath: string): Promise<void> {
     const key = this.fromObjectPath(objectPath);
     const config = this.getConfig();

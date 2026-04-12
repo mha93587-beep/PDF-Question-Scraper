@@ -2,11 +2,12 @@ import { Router, type IRouter } from "express";
 import multer from "multer";
 import { readFile } from "fs/promises";
 import path from "path";
-import { eq, sql, count } from "drizzle-orm";
+import { eq, count } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { papersTable, questionsTable, batchItemsTable } from "@workspace/db/schema";
-import { parsePdfText } from "../lib/pdf-parser";
+import { parsePdfText, type ParseResult } from "../lib/pdf-parser";
 import { logger } from "../lib/logger";
+import { B2StorageService } from "../lib/b2Storage.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -21,6 +22,25 @@ const upload = multer({
 });
 
 const router: IRouter = Router();
+const storage = new B2StorageService();
+
+async function uploadQuestionFiguresToB2(
+  paperId: number,
+  questions: ParseResult["questions"]
+): Promise<Map<number, string>> {
+  const objectPaths = new Map<number, string>();
+  for (const q of questions) {
+    if (!q.figureBuffer) continue;
+    try {
+      const key = `question-snapshots/${paperId}/${q.questionNumber}.jpg`;
+      const objectPath = await storage.uploadBuffer(key, q.figureBuffer, "image/jpeg");
+      objectPaths.set(q.questionNumber, objectPath);
+    } catch (err) {
+      logger.warn({ err, questionNumber: q.questionNumber, paperId }, "Failed to upload question snapshot to B2");
+    }
+  }
+  return objectPaths;
+}
 
 function resolveWorkspacePath(filePath: string): string {
   if (path.isAbsolute(filePath)) {
@@ -39,6 +59,9 @@ async function processPdfAndSave(paperId: number, pdfBuffer: Buffer, fileName: s
     await setStage(paperId, "extracting_text");
     const result = await parsePdfText(pdfBuffer, (stage) => setStage(paperId, stage));
 
+    await setStage(paperId, "uploading_figures");
+    const figureObjectPaths = await uploadQuestionFiguresToB2(paperId, result.questions);
+
     if (result.questions.length > 0) {
       await db.insert(questionsTable).values(
         result.questions.map((q) => ({
@@ -54,17 +77,23 @@ async function processPdfAndSave(paperId: number, pdfBuffer: Buffer, fileName: s
           chosenOption: q.chosenOption,
           status: q.status,
           hasFigure: q.hasFigure,
-          figureData: q.figureData,
+          figureData: null,
+          figureObjectPath: figureObjectPaths.get(q.questionNumber) ?? null,
           note: q.note,
         }))
       );
     }
 
     await db.update(papersTable)
-      .set({ totalQuestions: result.questions.length, processingStatus: "done", processingStage: null })
+      .set({
+        totalQuestions: result.questions.length,
+        fullPdfText: result.fullPdfText,
+        processingStatus: "done",
+        processingStage: null,
+      })
       .where(eq(papersTable.id, paperId));
 
-    logger.info({ paperId, totalQuestions: result.questions.length }, "Paper processed successfully");
+    logger.info({ paperId, totalQuestions: result.questions.length, figuresUploaded: figureObjectPaths.size }, "Paper processed successfully");
   } catch (err) {
     logger.error({ err, paperId }, "PDF processing failed");
     await db.update(papersTable)

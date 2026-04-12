@@ -3,11 +3,30 @@ import { eq } from "drizzle-orm";
 import JSZip from "jszip";
 import { db } from "@workspace/db";
 import { batchJobsTable, batchItemsTable, papersTable, questionsTable } from "@workspace/db";
-import { parsePdfText } from "../lib/pdf-parser.js";
+import { parsePdfText, type ParseResult } from "../lib/pdf-parser.js";
 import { B2StorageService } from "../lib/b2Storage.js";
+import { logger } from "../lib/logger.js";
 
 const router = Router();
 const storage = new B2StorageService();
+
+async function uploadQuestionFiguresToB2(
+  paperId: number,
+  questions: ParseResult["questions"]
+): Promise<Map<number, string>> {
+  const objectPaths = new Map<number, string>();
+  for (const q of questions) {
+    if (!q.figureBuffer) continue;
+    try {
+      const key = `question-snapshots/${paperId}/${q.questionNumber}.jpg`;
+      const objectPath = await storage.uploadBuffer(key, q.figureBuffer, "image/jpeg");
+      objectPaths.set(q.questionNumber, objectPath);
+    } catch (err) {
+      logger.warn({ err, questionNumber: q.questionNumber, paperId }, "Failed to upload question snapshot to B2 (batch)");
+    }
+  }
+  return objectPaths;
+}
 
 function guessExamNameFromFile(fileName: string): string {
   return fileName.replace(/\.pdf$/i, "").trim();
@@ -82,6 +101,11 @@ async function processBatchInBackground(jobId: number) {
 
         const result = await parsePdfText(pdfBuffer, setStage);
 
+        await db.update(batchItemsTable)
+          .set({ processingStage: "uploading_figures" })
+          .where(eq(batchItemsTable.id, item.id));
+        const figureObjectPaths = await uploadQuestionFiguresToB2(paper.id, result.questions);
+
         if (result.questions.length > 0) {
           await db.insert(questionsTable).values(
             result.questions.map((q) => ({
@@ -97,7 +121,8 @@ async function processBatchInBackground(jobId: number) {
               chosenOption: q.chosenOption,
               status: q.status,
               hasFigure: q.hasFigure,
-              figureData: q.figureData,
+              figureData: null,
+              figureObjectPath: figureObjectPaths.get(q.questionNumber) ?? null,
               note: q.note,
             }))
           );
@@ -106,6 +131,7 @@ async function processBatchInBackground(jobId: number) {
         await db.update(papersTable).set({
           examName: placeholderName,
           totalQuestions: result.questions.length,
+          fullPdfText: result.fullPdfText,
           processingStatus: "done",
           processingStage: null,
         }).where(eq(papersTable.id, paper.id));

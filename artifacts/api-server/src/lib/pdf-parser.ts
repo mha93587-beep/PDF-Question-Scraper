@@ -17,7 +17,7 @@ interface ParsedQuestion {
   chosenOption: string | null;
   status: string | null;
   hasFigure: boolean;
-  figureData: string | null;
+  figureBuffer: Buffer | null;
   note: string | null;
 }
 
@@ -25,6 +25,7 @@ export interface ParseResult {
   questions: ParsedQuestion[];
   examName: string;
   detectedFormat: string;
+  fullPdfText: string;
 }
 
 function cleanText(text: string): string {
@@ -56,7 +57,7 @@ interface PdfPage {
 }
 
 interface QuestionVisual {
-  dataUrl: string;
+  figureBuffer: Buffer;
   ocrText: string;
 }
 
@@ -319,7 +320,7 @@ async function renderQuestionVisual(
     }
 
     return {
-      dataUrl: `data:image/jpeg;base64,${jpg.toString("base64")}`,
+      figureBuffer: jpg,
       ocrText,
     };
   } catch (err) {
@@ -582,7 +583,7 @@ function parse2016Format(text: string, visualsByQuestion: Map<number, QuestionVi
         chosenOption,
         status,
         hasFigure: keepFigure,
-        figureData: keepFigure && visual ? visual.dataUrl : null,
+        figureBuffer: visual ? visual.figureBuffer : null,
         note: note || null,
       });
     }
@@ -652,7 +653,7 @@ function parse2025Format(text: string, visualsByQuestion: Map<number, QuestionVi
       chosenOption: null,
       status: null,
       hasFigure,
-      figureData: hasFigure && visual ? visual.dataUrl : null,
+      figureBuffer: visual ? visual.figureBuffer : null,
       note: null,
     });
   }
@@ -749,12 +750,13 @@ export async function parsePdfText(
       }
     }
 
-    logger.info({ questionsFound: questions.length, questionImagesFound: questions.filter((q) => q.figureData).length, ocrCropsProcessed: visualsByQuestion.size }, "Questions parsed");
+    logger.info({ questionsFound: questions.length, questionImagesFound: questions.filter((q) => q.figureBuffer).length, ocrCropsProcessed: visualsByQuestion.size }, "Questions parsed");
 
     return {
       questions,
       examName: extractExamName(text),
       detectedFormat: format,
+      fullPdfText: text,
     };
   } finally {
     await rm(tempDir, { recursive: true, force: true });
