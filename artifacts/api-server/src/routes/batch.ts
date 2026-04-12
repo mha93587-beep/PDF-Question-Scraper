@@ -103,12 +103,8 @@ async function processBatchInBackground(jobId: number) {
           );
         }
 
-        const finalExamName = result.examName && result.examName.length > 3
-          ? result.examName
-          : placeholderName;
-
         await db.update(papersTable).set({
-          examName: finalExamName,
+          examName: placeholderName,
           totalQuestions: result.questions.length,
           processingStatus: "done",
           processingStage: null,
