@@ -6,9 +6,11 @@ import {
 } from "@workspace/api-zod";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
 import { ObjectPermission } from "../lib/objectAcl";
+import { B2StorageService } from "../lib/b2Storage";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
+const b2StorageService = new B2StorageService();
 
 /**
  * POST /storage/uploads/request-url
@@ -27,8 +29,15 @@ router.post("/storage/uploads/request-url", async (req: Request, res: Response) 
   try {
     const { name, size, contentType } = parsed.data;
 
-    const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-    const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+    if (!name.toLowerCase().endsWith(".zip")) {
+      res.status(400).json({ error: "Only ZIP uploads are supported here" });
+      return;
+    }
+
+    const { uploadURL, objectPath } = await b2StorageService.getUploadUrl({
+      fileName: name,
+      contentType: contentType || "application/zip",
+    });
 
     res.json(
       RequestUploadUrlResponse.parse({
@@ -38,8 +47,8 @@ router.post("/storage/uploads/request-url", async (req: Request, res: Response) 
       }),
     );
   } catch (error) {
-    req.log.error({ err: error }, "Error generating upload URL");
-    res.status(500).json({ error: "Failed to generate upload URL" });
+    req.log.error({ err: error }, "Error generating Backblaze B2 upload URL");
+    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to generate upload URL" });
   }
 });
 

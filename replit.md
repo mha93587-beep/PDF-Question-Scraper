@@ -34,8 +34,8 @@ A full-stack web application that scrapes previous year question papers from PDF
 
 ### Batch ZIP Processing
 - User uploads a ZIP (up to 1 GB) via **Batch ZIP Upload** page
-- ZIP goes directly from browser → Google Cloud Storage (presigned URL) — server never holds the file in memory
-- Backend streams ZIP from GCS, extracts each PDF, processes them **sequentially** (OCR is CPU-heavy)
+- ZIP goes directly from browser → Backblaze B2 (S3-compatible presigned URL) — server never holds the upload in memory
+- Backend downloads ZIP from B2, extracts each PDF, processes them **sequentially** (OCR is CPU-heavy), then deletes the ZIP from B2 in a cleanup step so storage stays free
 - Each PDF gets its own `batch_items` row with real-time stage tracking
 - Frontend polls `/api/batch/:jobId` every 2.5s; localStorage persists the job ID across refreshes
 
@@ -46,9 +46,9 @@ A full-stack web application that scrapes previous year question papers from PDF
 - `batch_items` - Individual PDFs within a batch job (fileName, status, processingStage, questionsExtracted, paperId)
 
 ### Object Storage
-- Replit App Storage (Google Cloud Storage) used for ZIP uploads
-- GCS bucket: `replit-objstore-c14d6db7-d667-4aa1-baa5-bd2e19a12d2f`
-- Server files: `artifacts/api-server/src/lib/objectStorage.ts`, `objectAcl.ts`, `routes/storage.ts`
+- Backblaze B2 S3-compatible storage is used for batch ZIP uploads
+- Required config: `B2_BUCKET`, `B2_REGION` or `B2_ENDPOINT`; required secrets: `B2_KEY_ID`, `B2_APPLICATION_KEY`
+- Server files: `artifacts/api-server/src/lib/b2Storage.ts`, `routes/storage.ts`, `routes/batch.ts`
 - Client lib: `lib/object-storage-web/`
 
 ## Key Commands

@@ -328,12 +328,12 @@ export default function BatchUploadPage() {
           {isUploading && (
             <div className="space-y-2">
               <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Uploading to Cloud Storage...</span>
+                <span className="text-muted-foreground">Uploading to Backblaze B2...</span>
                 <span className="font-medium">{uploadProgress}%</span>
               </div>
               <Progress value={uploadProgress} className="h-3" />
               <p className="text-xs text-muted-foreground">
-                The file is uploading directly to Google Cloud Storage — your server won't crash no matter how big the ZIP is.
+                The file is uploading directly to Backblaze B2 — your server won't crash no matter how big the ZIP is.
               </p>
             </div>
           )}
@@ -350,7 +350,7 @@ export default function BatchUploadPage() {
 
           <div className="grid grid-cols-3 gap-4 text-center text-sm pt-2">
             {[
-              { icon: FileArchive, label: "Upload ZIP", desc: "Direct to Cloud Storage\nServer never overloads" },
+              { icon: FileArchive, label: "Upload ZIP", desc: "Direct to Backblaze B2\nServer never overloads" },
               { icon: FileText, label: "Auto-extract PDFs", desc: "Each PDF detected\nautomatically from ZIP" },
               { icon: BrainCircuit, label: "Sequential OCR", desc: "One-by-one processing\nScanned PDFs supported" },
             ].map(({ icon: Icon, label, desc }) => (

@@ -4,24 +4,25 @@ import JSZip from "jszip";
 import { db } from "@workspace/db";
 import { batchJobsTable, batchItemsTable, papersTable, questionsTable } from "@workspace/db";
 import { parsePdfText } from "../lib/pdf-parser.js";
-import { ObjectStorageService } from "../lib/objectStorage.js";
+import { B2StorageService } from "../lib/b2Storage.js";
 
 const router = Router();
-const storage = new ObjectStorageService();
+const storage = new B2StorageService();
 
 function guessExamNameFromFile(fileName: string): string {
   return fileName.replace(/\.pdf$/i, "").trim();
 }
 
 async function processBatchInBackground(jobId: number) {
+  let zipObjectPath: string | null = null;
   try {
     const [job] = await db.select().from(batchJobsTable).where(eq(batchJobsTable.id, jobId));
     if (!job) return;
+    zipObjectPath = job.zipObjectPath;
 
     await db.update(batchJobsTable).set({ status: "downloading" }).where(eq(batchJobsTable.id, jobId));
 
-    const objectFile = await storage.getObjectEntityFile(job.zipObjectPath);
-    const [zipContents] = await objectFile.download();
+    const zipContents = await storage.downloadObject(job.zipObjectPath);
     const zip = await JSZip.loadAsync(zipContents);
 
     const pdfFiles = Object.entries(zip.files).filter(
@@ -147,6 +148,14 @@ async function processBatchInBackground(jobId: number) {
       status: "error",
       error: err?.message ?? "Unknown error",
     }).where(eq(batchJobsTable.id, jobId));
+  } finally {
+    if (zipObjectPath) {
+      try {
+        await storage.deleteObject(zipObjectPath);
+      } catch (deleteErr) {
+        console.error("Failed to delete processed ZIP from Backblaze B2", deleteErr);
+      }
+    }
   }
 }
 
