@@ -27,11 +27,13 @@ export class B2ObjectNotFoundError extends Error {
 
 export class B2StorageService {
   private getConfig(): B2Config {
-    const bucket = process.env.B2_BUCKET;
-    const keyId = process.env.B2_KEY_ID;
-    const applicationKey = process.env.B2_APPLICATION_KEY;
-    const region = process.env.B2_REGION;
-    const endpoint = process.env.B2_ENDPOINT || (region ? `https://s3.${region}.backblazeb2.com` : undefined);
+    const bucket = process.env.B2_BUCKET?.trim();
+    const keyId = process.env.B2_KEY_ID?.trim();
+    const applicationKey = process.env.B2_APPLICATION_KEY?.trim();
+    const configuredRegion = process.env.B2_REGION?.trim();
+    const configuredEndpoint = process.env.B2_ENDPOINT?.trim();
+    const endpoint = normalizeEndpoint(configuredEndpoint || configuredRegion);
+    const region = normalizeRegion(configuredRegion || configuredEndpoint);
 
     const missing = [
       !bucket && "B2_BUCKET",
@@ -49,7 +51,7 @@ export class B2StorageService {
       bucket,
       keyId,
       applicationKey,
-      region: region || "us-west-000",
+      region,
       endpoint,
     };
   }
@@ -148,4 +150,38 @@ export class B2StorageService {
 
     throw new B2ObjectNotFoundError();
   }
+}
+
+function normalizeEndpoint(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    return value;
+  }
+
+  if (value.includes(".")) {
+    return `https://${value}`;
+  }
+
+  return `https://s3.${value}.backblazeb2.com`;
+}
+
+function normalizeRegion(value?: string): string {
+  if (!value) {
+    return "us-west-000";
+  }
+
+  try {
+    const hostname = value.startsWith("http://") || value.startsWith("https://")
+      ? new URL(value).hostname
+      : value;
+    const match = hostname.match(/(?:^|\.)s3\.([a-z0-9-]+)\.backblazeb2\.com$/i);
+    if (match?.[1]) {
+      return match[1];
+    }
+  } catch {}
+
+  return value;
 }
