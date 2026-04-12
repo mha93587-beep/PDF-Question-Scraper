@@ -4,7 +4,7 @@ import { readFile } from "fs/promises";
 import path from "path";
 import { eq, sql, count } from "drizzle-orm";
 import { db } from "@workspace/db";
-import { papersTable, questionsTable } from "@workspace/db/schema";
+import { papersTable, questionsTable, batchItemsTable } from "@workspace/db/schema";
 import { parsePdfText } from "../lib/pdf-parser";
 import { logger } from "../lib/logger";
 
@@ -238,6 +238,7 @@ router.delete("/papers/:id/delete", async (req, res): Promise<void> => {
   if (isNaN(id)) { res.status(400).json({ error: "Invalid paper ID" }); return; }
 
   await db.delete(questionsTable).where(eq(questionsTable.paperId, id));
+  await db.delete(batchItemsTable).where(eq(batchItemsTable.paperId, id));
   const [deleted] = await db.delete(papersTable).where(eq(papersTable.id, id)).returning();
   if (!deleted) { res.status(404).json({ error: "Paper not found" }); return; }
   res.json({ success: true });
