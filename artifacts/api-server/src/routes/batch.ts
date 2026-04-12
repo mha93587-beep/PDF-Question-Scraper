@@ -10,11 +10,7 @@ const router = Router();
 const storage = new ObjectStorageService();
 
 function guessExamNameFromFile(fileName: string): string {
-  return fileName
-    .replace(/\.pdf$/i, "")
-    .replace(/[_\-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return fileName.replace(/\.pdf$/i, "").trim();
 }
 
 async function processBatchInBackground(jobId: number) {

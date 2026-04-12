@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useToast } from "@/hooks/use-toast";
 import {
   useGetPaper,
   useGetPaperQuestions,
@@ -49,6 +50,7 @@ export default function PaperDetailPage({ id }: { id: string }) {
   const paperId = parseInt(id, 10);
   const queryClient = useQueryClient();
   const [, navigate] = useLocation();
+  const { toast } = useToast();
 
   const { data: paper, isLoading: paperLoading } = useGetPaper(paperId, {
     query: { enabled: !isNaN(paperId), queryKey: getGetPaperQueryKey(paperId) },
@@ -92,6 +94,13 @@ export default function PaperDetailPage({ id }: { id: string }) {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getListPapersQueryKey() });
         navigate("/papers");
+      },
+      onError: () => {
+        toast({
+          title: "Delete failed",
+          description: "Could not delete this paper. Please try again.",
+          variant: "destructive",
+        });
       },
     },
   });
