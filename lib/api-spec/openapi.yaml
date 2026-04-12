@@ -14,6 +14,10 @@ tags:
     description: Paper operations
   - name: questions
     description: Question operations
+  - name: storage
+    description: Object storage operations
+  - name: batch
+    description: Batch ZIP processing operations
 paths:
   /healthz:
     get:
@@ -268,6 +272,72 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UploadResult"
+  /storage/uploads/request-url:
+    post:
+      operationId: requestUploadUrl
+      tags: [storage]
+      summary: Request a presigned URL to upload a file directly to Cloud Storage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestUploadUrlBody"
+      responses:
+        "200":
+          description: Presigned upload URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestUploadUrlResponse"
+  /batch/start:
+    post:
+      operationId: startBatchJob
+      tags: [batch]
+      summary: Start a batch ZIP extraction job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                zipObjectPath:
+                  type: string
+                zipFileName:
+                  type: string
+              required:
+                - zipObjectPath
+      responses:
+        "200":
+          description: Batch job created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: integer
+                required:
+                  - jobId
+  /batch/{jobId}:
+    get:
+      operationId: getBatchJob
+      tags: [batch]
+      summary: Get batch job status and items
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Batch job status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchJobStatus"
 components:
   schemas:
     HealthStatus:
@@ -445,3 +515,83 @@ components:
         - totalQuestions
         - withFigures
         - bySubject
+    RequestUploadUrlBody:
+      type: object
+      properties:
+        name:
+          type: string
+        size:
+          type: integer
+        contentType:
+          type: string
+      required:
+        - name
+        - size
+        - contentType
+    RequestUploadUrlResponse:
+      type: object
+      properties:
+        uploadURL:
+          type: string
+        objectPath:
+          type: string
+      required:
+        - uploadURL
+        - objectPath
+    BatchItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        fileName:
+          type: string
+        status:
+          type: string
+        processingStage:
+          type: string
+          nullable: true
+        questionsExtracted:
+          type: integer
+        error:
+          type: string
+          nullable: true
+        paperId:
+          type: integer
+          nullable: true
+      required:
+        - id
+        - fileName
+        - status
+        - questionsExtracted
+    BatchJobStatus:
+      type: object
+      properties:
+        id:
+          type: integer
+        status:
+          type: string
+        zipFileName:
+          type: string
+          nullable: true
+        totalFiles:
+          type: integer
+        processedFiles:
+          type: integer
+        failedFiles:
+          type: integer
+        error:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchItem"
+      required:
+        - id
+        - status
+        - totalFiles
+        - processedFiles
+        - failedFiles
+        - items

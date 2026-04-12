@@ -35,6 +35,34 @@ export const questionsTable = pgTable("questions", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const batchJobsTable = pgTable("batch_jobs", {
+  id: serial("id").primaryKey(),
+  zipObjectPath: text("zip_object_path").notNull(),
+  zipFileName: text("zip_file_name"),
+  totalFiles: integer("total_files").default(0),
+  processedFiles: integer("processed_files").default(0),
+  failedFiles: integer("failed_files").default(0),
+  status: text("status").notNull().default("pending"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const batchItemsTable = pgTable("batch_items", {
+  id: serial("id").primaryKey(),
+  batchJobId: integer("batch_job_id").references(() => batchJobsTable.id),
+  fileName: text("file_name").notNull(),
+  paperId: integer("paper_id").references(() => papersTable.id),
+  status: text("status").notNull().default("pending"),
+  processingStage: text("processing_stage"),
+  questionsExtracted: integer("questions_extracted").default(0),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type BatchJob = typeof batchJobsTable.$inferSelect;
+export type BatchItem = typeof batchItemsTable.$inferSelect;
+
 export const insertPaperSchema = createInsertSchema(papersTable).omit({ id: true, createdAt: true });
 export type InsertPaper = z.infer<typeof insertPaperSchema>;
 export type Paper = typeof papersTable.$inferSelect;

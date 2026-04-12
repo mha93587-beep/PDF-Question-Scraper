@@ -1,10 +1,11 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, FileUp, Files, ListTodo, Database, GraduationCap } from "lucide-react";
+import { LayoutDashboard, FileUp, Files, ListTodo, GraduationCap, FolderArchive } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Upload Paper", href: "/upload", icon: FileUp },
+  { name: "Batch ZIP Upload", href: "/batch", icon: FolderArchive },
   { name: "All Papers", href: "/papers", icon: Files },
   { name: "Question Bank", href: "/questions", icon: ListTodo },
 ];

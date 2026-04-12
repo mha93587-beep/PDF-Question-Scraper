@@ -46,3 +46,6 @@ channel = "stable-25_05"
 
 [userenv.shared]
 NEON_DATABASE_URL = "postgresql://neondb_owner:npg_BloQGNv21MpO@ep-bold-bread-a18jvi4l-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+
+[objectStorage]
+defaultBucketID = "replit-objstore-c14d6db7-d667-4aa1-baa5-bd2e19a12d2f"

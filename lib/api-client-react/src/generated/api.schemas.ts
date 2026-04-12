@@ -79,6 +79,39 @@ export interface QuestionStats {
   bySubject: QuestionStatsBySubjectItem[];
 }
 
+export interface RequestUploadUrlBody {
+  name: string;
+  size: number;
+  contentType: string;
+}
+
+export interface RequestUploadUrlResponse {
+  uploadURL: string;
+  objectPath: string;
+}
+
+export interface BatchItem {
+  id: number;
+  fileName: string;
+  status: string;
+  processingStage?: string | null;
+  questionsExtracted: number;
+  error?: string | null;
+  paperId?: number | null;
+}
+
+export interface BatchJobStatus {
+  id: number;
+  status: string;
+  zipFileName?: string | null;
+  totalFiles: number;
+  processedFiles: number;
+  failedFiles: number;
+  error?: string | null;
+  createdAt?: string;
+  items: BatchItem[];
+}
+
 export type UploadPaperBody = {
   file: Blob;
   examName: string;
@@ -98,4 +131,13 @@ export type ListQuestionsParams = {
 
 export type ProcessAttachedPdfBody = {
   filePath: string;
+};
+
+export type StartBatchJobBody = {
+  zipObjectPath: string;
+  zipFileName?: string;
+};
+
+export type StartBatchJob200 = {
+  jobId: number;
 };

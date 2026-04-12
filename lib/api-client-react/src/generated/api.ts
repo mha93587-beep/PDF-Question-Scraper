@@ -17,6 +17,7 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  BatchJobStatus,
   DeletePaper200,
   HealthStatus,
   ListQuestionsParams,
@@ -24,6 +25,10 @@ import type {
   ProcessAttachedPdfBody,
   Question,
   QuestionStats,
+  RequestUploadUrlBody,
+  RequestUploadUrlResponse,
+  StartBatchJob200,
+  StartBatchJobBody,
   UpdatePaperBody,
   UpdateQuestionBody,
   UploadPaperBody,
@@ -1055,3 +1060,262 @@ export const useProcessAttachedPdf = <
 > => {
   return useMutation(getProcessAttachedPdfMutationOptions(options));
 };
+
+/**
+ * @summary Request a presigned URL to upload a file directly to Cloud Storage
+ */
+export const getRequestUploadUrlUrl = () => {
+  return `/api/storage/uploads/request-url`;
+};
+
+export const requestUploadUrl = async (
+  requestUploadUrlBody: RequestUploadUrlBody,
+  options?: RequestInit,
+): Promise<RequestUploadUrlResponse> => {
+  return customFetch<RequestUploadUrlResponse>(getRequestUploadUrlUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(requestUploadUrlBody),
+  });
+};
+
+export const getRequestUploadUrlMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestUploadUrl>>,
+    TError,
+    { data: BodyType<RequestUploadUrlBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof requestUploadUrl>>,
+  TError,
+  { data: BodyType<RequestUploadUrlBody> },
+  TContext
+> => {
+  const mutationKey = ["requestUploadUrl"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof requestUploadUrl>>,
+    { data: BodyType<RequestUploadUrlBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return requestUploadUrl(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RequestUploadUrlMutationResult = NonNullable<
+  Awaited<ReturnType<typeof requestUploadUrl>>
+>;
+export type RequestUploadUrlMutationBody = BodyType<RequestUploadUrlBody>;
+export type RequestUploadUrlMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Request a presigned URL to upload a file directly to Cloud Storage
+ */
+export const useRequestUploadUrl = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestUploadUrl>>,
+    TError,
+    { data: BodyType<RequestUploadUrlBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof requestUploadUrl>>,
+  TError,
+  { data: BodyType<RequestUploadUrlBody> },
+  TContext
+> => {
+  return useMutation(getRequestUploadUrlMutationOptions(options));
+};
+
+/**
+ * @summary Start a batch ZIP extraction job
+ */
+export const getStartBatchJobUrl = () => {
+  return `/api/batch/start`;
+};
+
+export const startBatchJob = async (
+  startBatchJobBody: StartBatchJobBody,
+  options?: RequestInit,
+): Promise<StartBatchJob200> => {
+  return customFetch<StartBatchJob200>(getStartBatchJobUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(startBatchJobBody),
+  });
+};
+
+export const getStartBatchJobMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startBatchJob>>,
+    TError,
+    { data: BodyType<StartBatchJobBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof startBatchJob>>,
+  TError,
+  { data: BodyType<StartBatchJobBody> },
+  TContext
+> => {
+  const mutationKey = ["startBatchJob"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof startBatchJob>>,
+    { data: BodyType<StartBatchJobBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return startBatchJob(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StartBatchJobMutationResult = NonNullable<
+  Awaited<ReturnType<typeof startBatchJob>>
+>;
+export type StartBatchJobMutationBody = BodyType<StartBatchJobBody>;
+export type StartBatchJobMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Start a batch ZIP extraction job
+ */
+export const useStartBatchJob = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startBatchJob>>,
+    TError,
+    { data: BodyType<StartBatchJobBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof startBatchJob>>,
+  TError,
+  { data: BodyType<StartBatchJobBody> },
+  TContext
+> => {
+  return useMutation(getStartBatchJobMutationOptions(options));
+};
+
+/**
+ * @summary Get batch job status and items
+ */
+export const getGetBatchJobUrl = (jobId: number) => {
+  return `/api/batch/${jobId}`;
+};
+
+export const getBatchJob = async (
+  jobId: number,
+  options?: RequestInit,
+): Promise<BatchJobStatus> => {
+  return customFetch<BatchJobStatus>(getGetBatchJobUrl(jobId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetBatchJobQueryKey = (jobId: number) => {
+  return [`/api/batch/${jobId}`] as const;
+};
+
+export const getGetBatchJobQueryOptions = <
+  TData = Awaited<ReturnType<typeof getBatchJob>>,
+  TError = ErrorType<unknown>,
+>(
+  jobId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getBatchJob>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetBatchJobQueryKey(jobId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getBatchJob>>> = ({
+    signal,
+  }) => getBatchJob(jobId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!jobId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getBatchJob>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetBatchJobQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getBatchJob>>
+>;
+export type GetBatchJobQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get batch job status and items
+ */
+
+export function useGetBatchJob<
+  TData = Awaited<ReturnType<typeof getBatchJob>>,
+  TError = ErrorType<unknown>,
+>(
+  jobId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getBatchJob>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetBatchJobQueryOptions(jobId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}

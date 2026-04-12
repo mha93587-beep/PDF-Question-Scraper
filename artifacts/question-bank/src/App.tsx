@@ -5,6 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Layout } from "@/components/layout";
 import Dashboard from "@/pages/dashboard";
 import UploadPage from "@/pages/upload";
+import BatchUploadPage from "@/pages/batch-upload";
 import PapersPage from "@/pages/papers";
 import PaperDetailPage from "@/pages/paper-detail";
 import QuestionsPage from "@/pages/questions";
@@ -18,6 +19,7 @@ function Router() {
       <Switch>
         <Route path="/" component={Dashboard} />
         <Route path="/upload" component={UploadPage} />
+        <Route path="/batch" component={BatchUploadPage} />
         <Route path="/papers" component={PapersPage} />
         <Route path="/papers/:id">
           {(params) => <PaperDetailPage id={params.id} />}

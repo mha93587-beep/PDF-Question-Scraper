@@ -32,9 +32,24 @@ A full-stack web application that scrapes previous year question papers from PDF
 - **Format 2016**: Questions with `Question ID`, `Status`, `Chosen Option` fields
 - **Format 2025**: Questions with direct `Q.N` numbering and `A./B./C./D.` options
 
+### Batch ZIP Processing
+- User uploads a ZIP (up to 1 GB) via **Batch ZIP Upload** page
+- ZIP goes directly from browser → Google Cloud Storage (presigned URL) — server never holds the file in memory
+- Backend streams ZIP from GCS, extracts each PDF, processes them **sequentially** (OCR is CPU-heavy)
+- Each PDF gets its own `batch_items` row with real-time stage tracking
+- Frontend polls `/api/batch/:jobId` every 2.5s; localStorage persists the job ID across refreshes
+
 ### Database Schema
-- `papers` - Exam papers (exam name, year, shift, total questions, processingStatus, processingError)
+- `papers` - Exam papers (exam name, year, shift, total questions, processingStatus, processingStage, processingError)
 - `questions` - Individual questions (text, options A-D, correct answer, figure flag, notes)
+- `batch_jobs` - ZIP batch jobs (zipObjectPath, totalFiles, processedFiles, failedFiles, status)
+- `batch_items` - Individual PDFs within a batch job (fileName, status, processingStage, questionsExtracted, paperId)
+
+### Object Storage
+- Replit App Storage (Google Cloud Storage) used for ZIP uploads
+- GCS bucket: `replit-objstore-c14d6db7-d667-4aa1-baa5-bd2e19a12d2f`
+- Server files: `artifacts/api-server/src/lib/objectStorage.ts`, `objectAcl.ts`, `routes/storage.ts`
+- Client lib: `lib/object-storage-web/`
 
 ## Key Commands
 

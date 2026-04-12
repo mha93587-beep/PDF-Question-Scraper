@@ -6,6 +6,8 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./batchItem";
+export * from "./batchJobStatus";
 export * from "./deletePaper200";
 export * from "./healthStatus";
 export * from "./listQuestionsParams";
@@ -14,6 +16,10 @@ export * from "./processAttachedPdfBody";
 export * from "./question";
 export * from "./questionStats";
 export * from "./questionStatsBySubjectItem";
+export * from "./requestUploadUrlBody";
+export * from "./requestUploadUrlResponse";
+export * from "./startBatchJob200";
+export * from "./startBatchJobBody";
 export * from "./updatePaperBody";
 export * from "./updateQuestionBody";
 export * from "./uploadPaperBody";

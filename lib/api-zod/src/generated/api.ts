@@ -264,3 +264,58 @@ export const ProcessAttachedPdfResponse = zod.object({
   totalQuestions: zod.number(),
   message: zod.string(),
 });
+
+/**
+ * @summary Request a presigned URL to upload a file directly to Cloud Storage
+ */
+export const RequestUploadUrlBody = zod.object({
+  name: zod.string(),
+  size: zod.number(),
+  contentType: zod.string(),
+});
+
+export const RequestUploadUrlResponse = zod.object({
+  uploadURL: zod.string(),
+  objectPath: zod.string(),
+});
+
+/**
+ * @summary Start a batch ZIP extraction job
+ */
+export const StartBatchJobBody = zod.object({
+  zipObjectPath: zod.string(),
+  zipFileName: zod.string().optional(),
+});
+
+export const StartBatchJobResponse = zod.object({
+  jobId: zod.number(),
+});
+
+/**
+ * @summary Get batch job status and items
+ */
+export const GetBatchJobParams = zod.object({
+  jobId: zod.coerce.number(),
+});
+
+export const GetBatchJobResponse = zod.object({
+  id: zod.number(),
+  status: zod.string(),
+  zipFileName: zod.string().nullish(),
+  totalFiles: zod.number(),
+  processedFiles: zod.number(),
+  failedFiles: zod.number(),
+  error: zod.string().nullish(),
+  createdAt: zod.string().optional(),
+  items: zod.array(
+    zod.object({
+      id: zod.number(),
+      fileName: zod.string(),
+      status: zod.string(),
+      processingStage: zod.string().nullish(),
+      questionsExtracted: zod.number(),
+      error: zod.string().nullish(),
+      paperId: zod.number().nullish(),
+    }),
+  ),
+});
