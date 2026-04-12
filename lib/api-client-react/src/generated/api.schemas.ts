@@ -16,6 +16,7 @@ export interface Paper {
   shift?: string | null;
   totalQuestions: number;
   fileName?: string | null;
+  fullPdfText?: string | null;
   processingStatus?: string | null;
   processingStage?: string | null;
   processingError?: string | null;
@@ -37,6 +38,7 @@ export interface Question {
   status?: string | null;
   hasFigure?: boolean;
   figureData?: string | null;
+  figureObjectPath?: string | null;
   subject?: string | null;
   note?: string | null;
   createdAt?: string;

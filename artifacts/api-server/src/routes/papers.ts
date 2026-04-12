@@ -295,6 +295,21 @@ router.patch("/questions/:id/update", async (req, res): Promise<void> => {
   res.json(updated);
 });
 
+router.get("/figure", async (req, res): Promise<void> => {
+  const objectPath = req.query.path;
+  if (!objectPath || typeof objectPath !== "string") {
+    res.status(400).json({ error: "path query parameter is required" });
+    return;
+  }
+  try {
+    const signedUrl = await storage.getSignedDownloadUrl(objectPath, 3600);
+    res.redirect(302, signedUrl);
+  } catch (err) {
+    logger.warn({ err, objectPath }, "Failed to generate signed download URL");
+    res.status(404).json({ error: "Figure not found or storage not configured" });
+  }
+});
+
 router.get("/questions/stats", async (_req, res): Promise<void> => {
   const [paperCount] = await db.select({ count: count() }).from(papersTable);
   const [questionCount] = await db.select({ count: count() }).from(questionsTable);

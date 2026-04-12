@@ -365,6 +365,9 @@ components:
         fileName:
           type: string
           nullable: true
+        fullPdfText:
+          type: string
+          nullable: true
         processingStatus:
           type: string
           nullable: true
@@ -419,6 +422,9 @@ components:
         hasFigure:
           type: boolean
         figureData:
+          type: string
+          nullable: true
+        figureObjectPath:
           type: string
           nullable: true
         subject:

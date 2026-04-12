@@ -21,6 +21,7 @@ export interface Question {
   status?: string | null;
   hasFigure?: boolean;
   figureData?: string | null;
+  figureObjectPath?: string | null;
   subject?: string | null;
   note?: string | null;
   createdAt?: string;

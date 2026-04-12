@@ -128,6 +128,14 @@ export class B2StorageService {
     }
   }
 
+  async getSignedDownloadUrl(objectPath: string, expiresIn = 3600): Promise<string> {
+    const key = this.fromObjectPath(objectPath);
+    const config = this.getConfig();
+    const client = this.getClient(config);
+    const command = new GetObjectCommand({ Bucket: config.bucket, Key: key });
+    return getSignedUrl(client, command, { expiresIn });
+  }
+
   async uploadBuffer(key: string, buffer: Buffer, contentType: string): Promise<string> {
     const config = this.getConfig();
     const client = this.getClient(config);
