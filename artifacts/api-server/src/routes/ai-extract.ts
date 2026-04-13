@@ -117,8 +117,7 @@ function isRetriableError(msg: string): { is503: boolean; is429: boolean } {
   return { is503, is429 };
 }
 
-async function withRetry<T>(fn: () => Promise<T>, retries = 10, delayMs = 5000): Promise<T> {
-  const MAX_WAIT_503 = 120_000;
+async function withRetry<T>(fn: () => Promise<T>, retries = 8): Promise<T> {
   for (let i = 0; i <= retries; i++) {
     try {
       return await fn();
@@ -126,9 +125,9 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 10, delayMs = 5000):
       const msg = err instanceof Error ? err.message : String(err);
       const { is503, is429 } = isRetriableError(msg);
       if ((is503 || is429) && i < retries) {
-        const wait = is429
-          ? 65000 + i * 10000
-          : Math.min(delayMs * Math.pow(2, i), MAX_WAIT_503);
+        // 429 = quota/TPM window (60s). Wait 65s fixed so the window resets.
+        // 503 = model overloaded. Wait 15s and try again (transient).
+        const wait = is429 ? 65000 : 15000;
         logger.warn({ attempt: i + 1, waitMs: wait, is429, is503 }, "Gemini error, retrying after wait...");
         await new Promise((r) => setTimeout(r, wait));
         continue;
@@ -211,7 +210,7 @@ async function runVisionExtraction(paperId: number, pdfObjectPath: string): Prom
 
   try {
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-2.0-flash",
       contents: [{
         role: "user",
         parts: [
@@ -256,7 +255,7 @@ async function runAiExtraction(paperId: number): Promise<void> {
   } else {
     try {
       const response = await withRetry(() => ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-2.0-flash",
         contents: [{
           role: "user",
           parts: [{ text: `${SYSTEM_PROMPT}\n\n---RAW PDF TEXT---\n${paper.fullPdfText!.slice(0, 60000)}\n---END---` }],
@@ -321,8 +320,8 @@ async function runAiExtraction(paperId: number): Promise<void> {
   }
 
   const modeLabel = useVision
-    ? (proNeeded.length > 0 ? "gemini-2.5-flash (vision) + gemini-2.5-pro (hybrid)" : "gemini-2.5-flash (vision)")
-    : (proNeeded.length > 0 ? "gemini-2.5-flash + gemini-2.5-pro (hybrid)" : "gemini-2.5-flash");
+    ? (proNeeded.length > 0 ? "gemini-2.0-flash (vision) + gemini-2.5-pro (hybrid)" : "gemini-2.0-flash (vision)")
+    : (proNeeded.length > 0 ? "gemini-2.0-flash + gemini-2.5-pro (hybrid)" : "gemini-2.0-flash");
 
   await db.update(papersTable).set({
     fullPdfText: flashResult.fullCleanText || paper.fullPdfText,
