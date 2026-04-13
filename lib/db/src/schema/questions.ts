@@ -16,6 +16,7 @@ export const papersTable = pgTable("papers", {
   aiExtractionStatus: text("ai_extraction_status"),
   aiExtractionError: text("ai_extraction_error"),
   aiExtractionModel: text("ai_extraction_model"),
+  aiProcessingStage: text("ai_processing_stage"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -49,6 +50,7 @@ export const batchJobsTable = pgTable("batch_jobs", {
   failedFiles: integer("failed_files").default(0),
   status: text("status").notNull().default("pending"),
   error: text("error"),
+  aiExtract: text("ai_extract").default("false"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -61,6 +63,7 @@ export const batchItemsTable = pgTable("batch_items", {
   status: text("status").notNull().default("pending"),
   processingStage: text("processing_stage"),
   questionsExtracted: integer("questions_extracted").default(0),
+  aiExtractionStatus: text("ai_extraction_status"),
   error: text("error"),
   createdAt: timestamp("created_at").defaultNow(),
 });
