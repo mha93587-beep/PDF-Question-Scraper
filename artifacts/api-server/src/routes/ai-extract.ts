@@ -76,16 +76,19 @@ async function setAiStage(paperId: number, stage: string) {
     .where(eq(papersTable.id, paperId));
 }
 
-async function withRetry<T>(fn: () => Promise<T>, retries = 4, delayMs = 5000): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, retries = 5, delayMs = 5000): Promise<T> {
   for (let i = 0; i <= retries; i++) {
     try {
       return await fn();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const is503 = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.includes("high demand");
-      if (is503 && i < retries) {
-        const wait = delayMs * Math.pow(2, i);
-        logger.warn({ attempt: i + 1, waitMs: wait }, "Gemini 503, retrying...");
+      const is503 = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.includes("overloaded") || msg.includes("high demand");
+      const is429 = msg.includes("429") || msg.toLowerCase().includes("quota") || msg.toLowerCase().includes("rate limit") || msg.toLowerCase().includes("resource_exhausted");
+      if ((is503 || is429) && i < retries) {
+        const wait = is429
+          ? 65000 + i * 10000
+          : delayMs * Math.pow(2, i);
+        logger.warn({ attempt: i + 1, waitMs: wait, is429, is503 }, "Gemini error, retrying after wait...");
         await new Promise((r) => setTimeout(r, wait));
         continue;
       }
@@ -165,14 +168,14 @@ async function runAiExtraction(paperId: number): Promise<void> {
     const q = proNeeded[i];
     await setAiStage(paperId, `pro_refine_${i + 1}_of_${proNeeded.length}`);
     try {
-      const response = await ai.models.generateContent({
+      const response = await withRetry(() => ai.models.generateContent({
         model: "gemini-2.5-pro",
         contents: [{
           role: "user",
           parts: [{ text: `${PRO_REFINE_PROMPT}\n\nQuestion:\n${JSON.stringify(q)}` }],
         }],
         config: { maxOutputTokens: 8192, responseMimeType: "application/json" },
-      });
+      }));
       try {
         const refined = safeParseGeminiJson<Record<string, unknown>>(response.text ?? "");
         const idx = questions.findIndex((x) => x.questionNumber === q.questionNumber);
@@ -291,14 +294,14 @@ router.get("/ai-extract/papers/:id", async (req, res): Promise<void> => {
       });
 
       try {
-        const proRes = await ai.models.generateContent({
+        const proRes = await withRetry(() => ai.models.generateContent({
           model: "gemini-2.5-pro",
           contents: [{
             role: "user",
             parts: [{ text: `${PRO_REFINE_PROMPT}\n\nQuestion:\n${JSON.stringify(q)}` }],
           }],
           config: { maxOutputTokens: 8192, responseMimeType: "application/json" },
-        });
+        }));
         try {
           const refined = safeParseGeminiJson<Record<string, unknown>>(proRes.text ?? "");
           const idx = questions.findIndex((x) => x.questionNumber === q.questionNumber);
