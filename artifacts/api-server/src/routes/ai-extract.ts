@@ -76,18 +76,24 @@ async function setAiStage(paperId: number, stage: string) {
     .where(eq(papersTable.id, paperId));
 }
 
-async function withRetry<T>(fn: () => Promise<T>, retries = 5, delayMs = 5000): Promise<T> {
+function isRetriableError(msg: string): { is503: boolean; is429: boolean } {
+  const is503 = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.includes("overloaded") || msg.includes("high demand");
+  const is429 = msg.includes("429") || msg.toLowerCase().includes("quota") || msg.toLowerCase().includes("rate limit") || msg.toLowerCase().includes("resource_exhausted");
+  return { is503, is429 };
+}
+
+async function withRetry<T>(fn: () => Promise<T>, retries = 10, delayMs = 5000): Promise<T> {
+  const MAX_WAIT_503 = 120_000;
   for (let i = 0; i <= retries; i++) {
     try {
       return await fn();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const is503 = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.includes("overloaded") || msg.includes("high demand");
-      const is429 = msg.includes("429") || msg.toLowerCase().includes("quota") || msg.toLowerCase().includes("rate limit") || msg.toLowerCase().includes("resource_exhausted");
+      const { is503, is429 } = isRetriableError(msg);
       if ((is503 || is429) && i < retries) {
         const wait = is429
           ? 65000 + i * 10000
-          : delayMs * Math.pow(2, i);
+          : Math.min(delayMs * Math.pow(2, i), MAX_WAIT_503);
         logger.warn({ attempt: i + 1, waitMs: wait, is429, is503 }, "Gemini error, retrying after wait...");
         await new Promise((r) => setTimeout(r, wait));
         continue;
@@ -224,11 +230,42 @@ async function runAiExtraction(paperId: number): Promise<void> {
   logger.info({ paperId, total: questions.length, proRefined: proNeeded.length }, "AI extraction complete");
 }
 
+async function runWithAutoRestart(paperId: number): Promise<void> {
+  const OUTER_RETRIES = 3;
+  const OUTER_WAIT_MS = 3 * 60 * 1000;
+  for (let attempt = 0; attempt <= OUTER_RETRIES; attempt++) {
+    try {
+      await runAiExtraction(paperId);
+      return;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const { is503, is429 } = isRetriableError(msg);
+      if ((is503 || is429) && attempt < OUTER_RETRIES) {
+        logger.warn({ attempt: attempt + 1, paperId }, `All inner retries exhausted. Waiting ${OUTER_WAIT_MS / 60000}min before full restart...`);
+        await db.update(papersTable)
+          .set({ aiExtractionStatus: "processing", aiProcessingStage: "waiting_retry", aiExtractionError: null })
+          .where(eq(papersTable.id, paperId));
+        await new Promise((r) => setTimeout(r, OUTER_WAIT_MS));
+        await db.update(papersTable)
+          .set({ aiProcessingStage: "flash_extract" })
+          .where(eq(papersTable.id, paperId));
+      } else {
+        logger.error({ err, paperId }, "Background AI extraction failed permanently");
+        await db.update(papersTable)
+          .set({ aiExtractionStatus: "error", aiExtractionError: msg, aiProcessingStage: null })
+          .where(eq(papersTable.id, paperId));
+        return;
+      }
+    }
+  }
+}
+
 export { runAiExtraction };
 
 const STAGE_MESSAGES: Record<string, string> = {
   flash_extract: "Gemini 2.5 Flash se text extract ho raha hai...",
   saving: "Questions database mein save ho rahe hain...",
+  waiting_retry: "Gemini abhi busy hai — 3 minute mein automatic retry hogi...",
 };
 
 function stageToMessage(stage: string): string {
@@ -277,15 +314,7 @@ router.get("/ai-extract/papers/:id", async (req, res): Promise<void> => {
       .set({ aiExtractionStatus: "processing", aiExtractionError: null, aiProcessingStage: "flash_extract" })
       .where(eq(papersTable.id, paperId));
 
-    setImmediate(() => {
-      runAiExtraction(paperId).catch(async (err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error({ err, paperId }, "Background AI extraction failed");
-        await db.update(papersTable)
-          .set({ aiExtractionStatus: "error", aiExtractionError: msg, aiProcessingStage: null })
-          .where(eq(papersTable.id, paperId));
-      });
-    });
+    setImmediate(() => { runWithAutoRestart(paperId); });
   }
 
   // Send initial stage message
@@ -349,14 +378,7 @@ router.post("/ai-extract/papers/:id/trigger", async (req, res): Promise<void> =>
     .set({ aiExtractionStatus: "processing", aiProcessingStage: "queued", aiExtractionError: null })
     .where(eq(papersTable.id, paperId));
 
-  setImmediate(() => {
-    runAiExtraction(paperId).catch(async (err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      await db.update(papersTable)
-        .set({ aiExtractionStatus: "error", aiExtractionError: msg, aiProcessingStage: null })
-        .where(eq(papersTable.id, paperId));
-    });
-  });
+  setImmediate(() => { runWithAutoRestart(paperId); });
 
   res.json({ started: true, paperId });
 });
