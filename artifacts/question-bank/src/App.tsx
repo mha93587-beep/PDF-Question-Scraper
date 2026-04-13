@@ -9,6 +9,7 @@ import BatchUploadPage from "@/pages/batch-upload";
 import PapersPage from "@/pages/papers";
 import PaperDetailPage from "@/pages/paper-detail";
 import QuestionsPage from "@/pages/questions";
+import AiExtractPage from "@/pages/ai-extract";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -25,6 +26,7 @@ function Router() {
           {(params) => <PaperDetailPage id={params.id} />}
         </Route>
         <Route path="/questions" component={QuestionsPage} />
+        <Route path="/ai-extract" component={AiExtractPage} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

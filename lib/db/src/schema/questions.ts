@@ -13,6 +13,9 @@ export const papersTable = pgTable("papers", {
   processingStatus: text("processing_status").default("done"),
   processingStage: text("processing_stage"),
   processingError: text("processing_error"),
+  aiExtractionStatus: text("ai_extraction_status"),
+  aiExtractionError: text("ai_extraction_error"),
+  aiExtractionModel: text("ai_extraction_model"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, FileUp, Files, ListTodo, GraduationCap, FolderArchive } from "lucide-react";
+import { LayoutDashboard, FileUp, Files, ListTodo, GraduationCap, FolderArchive, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navigation = [
@@ -8,6 +8,7 @@ const navigation = [
   { name: "Batch ZIP Upload", href: "/batch", icon: FolderArchive },
   { name: "All Papers", href: "/papers", icon: Files },
   { name: "Question Bank", href: "/questions", icon: ListTodo },
+  { name: "AI Extract", href: "/ai-extract", icon: Sparkles },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {

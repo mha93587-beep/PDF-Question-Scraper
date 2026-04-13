@@ -51,6 +51,26 @@ A full-stack web application that scrapes previous year question papers from PDF
 - Server files: `artifacts/api-server/src/lib/b2Storage.ts`, `routes/storage.ts`, `routes/batch.ts`
 - Client lib: `lib/object-storage-web/`
 
+## AI Extract (Gemini Integration)
+
+A new **AI Extract** tab uses Google Gemini AI with a hybrid strategy to clean up and re-structure questions:
+
+### Hybrid Strategy
+1. **Gemini 2.5 Flash** — Processes the full `full_pdf_text` for all questions. Fast and cost-efficient.
+2. **Gemini 2.5 Pro** — Re-processes only questions that Flash flags as `needsProReview: true` (complex math, multi-step reasoning, diagram references). Accuracy is preserved at Pro level while keeping costs low.
+
+### Features
+- LaTeX rendering (via KaTeX) for all math and reasoning questions — inline `$...$` and block `$$...$$`
+- SSE streaming for live progress updates on the frontend
+- Saves cleaned full text back to `full_pdf_text` column
+- Questions saved with structured fields: `questionText`, `optionA–D`, `correctAnswer`, `subject`, `note` (detailed explanation)
+- `aiExtractionStatus`, `aiExtractionError`, `aiExtractionModel` columns on papers table track extraction state
+
+### New Files
+- `artifacts/api-server/src/routes/ai-extract.ts` — SSE streaming extraction route
+- `artifacts/question-bank/src/pages/ai-extract.tsx` — Frontend page with LaTeX rendering
+- `lib/integrations-gemini-ai/` — Gemini AI client (provisioned via Replit AI Integrations)
+
 ## Key Commands
 
 - `pnpm run typecheck` — full typecheck across all packages
