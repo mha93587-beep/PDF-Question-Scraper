@@ -375,6 +375,8 @@ export default function AiExtractPage() {
     });
   }, [persistSingle]);
 
+  const reconnectCheckRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+
   const startSseAi = useCallback((paperId: number) => {
     if (sseRefs.current.has(paperId)) {
       sseRefs.current.get(paperId)!.close();
@@ -412,9 +414,33 @@ export default function AiExtractPage() {
     es.onerror = () => {
       es.close();
       sseRefs.current.delete(paperId);
-      updateSingle(paperId, (s) =>
-        s.phase === "ai" ? { ...s, phase: "error", error: "Connection lost. Click retry to re-run." } : s
-      );
+      // Don't immediately mark as error — background job may still be running.
+      // Check DB after a short delay and reconnect if still processing.
+      const existing = reconnectCheckRef.current.get(paperId);
+      if (existing) clearTimeout(existing);
+      const t = setTimeout(async () => {
+        reconnectCheckRef.current.delete(paperId);
+        try {
+          const r = await fetch(`/api/papers/${paperId}`);
+          const paper = await r.json();
+          if (paper.aiExtractionStatus === "processing") {
+            startSseAi(paperId);
+          } else if (paper.aiExtractionStatus === "done") {
+            updateSingle(paperId, (s) => ({ ...s, phase: "done", totalQuestions: paper.totalQuestions, model: paper.aiExtractionModel }));
+            queryClient.invalidateQueries({ queryKey: getListPapersQueryKey() });
+            queryClient.invalidateQueries({ queryKey: getGetPaperQuestionsQueryKey(paperId) });
+          } else {
+            updateSingle(paperId, (s) =>
+              s.phase === "ai" ? { ...s, phase: "error", error: paper.aiExtractionError ?? "Connection lost. Click retry to re-run." } : s
+            );
+          }
+        } catch {
+          updateSingle(paperId, (s) =>
+            s.phase === "ai" ? { ...s, phase: "error", error: "Connection lost. Click retry to re-run." } : s
+          );
+        }
+      }, 3000);
+      reconnectCheckRef.current.set(paperId, t);
     };
   }, [updateSingle, queryClient, toast]);
 
@@ -445,29 +471,32 @@ export default function AiExtractPage() {
   }, [updateSingle, startSseAi]);
 
   useEffect(() => {
+    const checkAndConnect = async (paperId: number) => {
+      try {
+        const r = await fetch(`/api/papers/${paperId}`);
+        const paper = await r.json();
+        if (paper.aiExtractionStatus === "done") {
+          updateSingle(paperId, (s) => ({ ...s, phase: "done", totalQuestions: paper.totalQuestions, model: paper.aiExtractionModel }));
+        } else if (paper.aiExtractionStatus === "processing") {
+          startSseAi(paperId);
+        } else if (paper.aiExtractionStatus === "error") {
+          updateSingle(paperId, (s) => ({ ...s, phase: "error", error: paper.aiExtractionError ?? s.error }));
+        } else {
+          startSseAi(paperId);
+        }
+      } catch {}
+    };
+
     for (const state of singleStates) {
       if (state.phase === "standard" && !pollRefs.current.has(state.paperId)) {
         startStandardPoll(state.paperId);
       }
       if (state.phase === "ai" && !sseRefs.current.has(state.paperId)) {
-        const checkAi = async () => {
-          try {
-            const res = await fetch(`/api/papers/${state.paperId}`);
-            const paper = await res.json();
-            if (paper.aiExtractionStatus === "done") {
-              updateSingle(state.paperId, (s) => ({
-                ...s, phase: "done", totalQuestions: paper.totalQuestions, model: paper.aiExtractionModel,
-              }));
-            } else if (paper.aiExtractionStatus === "error") {
-              updateSingle(state.paperId, (s) => ({ ...s, phase: "error", error: paper.aiExtractionError }));
-            } else if (paper.aiExtractionStatus === "processing") {
-              startSseAi(state.paperId);
-            } else {
-              startSseAi(state.paperId);
-            }
-          } catch {}
-        };
-        checkAi();
+        checkAndConnect(state.paperId);
+      }
+      // If marked as error due to connection drop, check DB — might still be running in background
+      if (state.phase === "error" && !sseRefs.current.has(state.paperId)) {
+        checkAndConnect(state.paperId);
       }
     }
     return () => {

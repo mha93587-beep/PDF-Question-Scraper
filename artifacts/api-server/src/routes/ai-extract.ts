@@ -226,19 +226,37 @@ async function runAiExtraction(paperId: number): Promise<void> {
 
 export { runAiExtraction };
 
+const STAGE_MESSAGES: Record<string, string> = {
+  flash_extract: "Gemini 2.5 Flash se text extract ho raha hai...",
+  saving: "Questions database mein save ho rahe hain...",
+};
+
+function stageToMessage(stage: string): string {
+  if (STAGE_MESSAGES[stage]) return STAGE_MESSAGES[stage];
+  const proMatch = stage.match(/^pro_refine_(\d+)_of_(\d+)$/);
+  if (proMatch) return `Pro model: Question ${proMatch[1]} of ${proMatch[2]} refine ho raha hai...`;
+  return "Processing...";
+}
+
 router.get("/ai-extract/papers/:id", async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const paperId = parseInt(raw, 10);
   if (isNaN(paperId)) { res.status(400).json({ error: "Invalid paper ID" }); return; }
 
-  const [paper] = await db.select().from(papersTable).where(eq(papersTable.id, paperId));
-  if (!paper) { res.status(404).json({ error: "Paper not found" }); return; }
-
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
 
-  const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  const send = (data: object) => {
+    try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch {}
+  };
+
+  const [paper] = await db.select().from(papersTable).where(eq(papersTable.id, paperId));
+  if (!paper) {
+    send({ stage: "error", message: "Paper not found" });
+    res.end();
+    return;
+  }
 
   if (!paper.fullPdfText || paper.fullPdfText.trim().length < 50) {
     send({ stage: "error", message: "Paper has no extracted text. Run standard extraction first." });
@@ -246,124 +264,77 @@ router.get("/ai-extract/papers/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  send({ stage: "flash_extract", message: "Gemini 2.5 Flash se text extract ho raha hai..." });
-
-  try {
-    const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [{
-        role: "user",
-        parts: [{ text: `${SYSTEM_PROMPT}\n\n---RAW PDF TEXT---\n${paper.fullPdfText.slice(0, 60000)}\n---END---` }],
-      }],
-      config: { maxOutputTokens: 65536, responseMimeType: "application/json" },
-    }));
-
-    const flashFinishReason = response.candidates?.[0]?.finishReason;
-    const flashResult = safeParseGeminiJson<{
-      fullCleanText: string;
-      questions: Array<{
-        questionNumber: number;
-        questionText: string;
-        optionA: string | null;
-        optionB: string | null;
-        optionC: string | null;
-        optionD: string | null;
-        correctAnswer: string | null;
-        subject: string | null;
-        note: string | null;
-        needsProReview: boolean;
-      }>;
-    }>(response.text ?? "", flashFinishReason);
-
-    const questions = [...flashResult.questions];
-    const proNeeded = questions.filter((q) => q.needsProReview);
-
-    send({
-      stage: "flash_done",
-      message: `Flash ne ${questions.length} questions extract kiye. ${proNeeded.length} Pro ke liye bheje ja rahe hain...`,
-      totalQuestions: questions.length,
-      proCount: proNeeded.length,
-    });
-
-    for (let i = 0; i < proNeeded.length; i++) {
-      const q = proNeeded[i];
-      send({
-        stage: "pro_refine",
-        message: `Pro model: Q${q.questionNumber} refine ho raha hai (${i + 1}/${proNeeded.length})`,
-        questionNumber: q.questionNumber,
-      });
-
-      try {
-        const proRes = await withRetry(() => ai.models.generateContent({
-          model: "gemini-2.5-pro",
-          contents: [{
-            role: "user",
-            parts: [{ text: `${PRO_REFINE_PROMPT}\n\nQuestion:\n${JSON.stringify(q)}` }],
-          }],
-          config: { maxOutputTokens: 8192, responseMimeType: "application/json" },
-        }));
-        try {
-          const refined = safeParseGeminiJson<Record<string, unknown>>(proRes.text ?? "");
-          const idx = questions.findIndex((x) => x.questionNumber === q.questionNumber);
-          if (idx !== -1) questions[idx] = { ...q, ...refined };
-        } catch {}
-      } catch (err) {
-        logger.warn({ err, questionNumber: q.questionNumber }, "Pro refinement failed, keeping Flash result");
-      }
-    }
-
-    send({ stage: "saving", message: "Questions database mein save ho rahe hain..." });
-
-    await db.delete(questionsTable).where(eq(questionsTable.paperId, paperId));
-    if (questions.length > 0) {
-      await db.insert(questionsTable).values(
-        questions.map((q) => ({
-          paperId,
-          questionNumber: q.questionNumber,
-          questionText: q.questionText,
-          optionA: q.optionA ?? null,
-          optionB: q.optionB ?? null,
-          optionC: q.optionC ?? null,
-          optionD: q.optionD ?? null,
-          correctAnswer: q.correctAnswer ?? null,
-          subject: q.subject ?? null,
-          note: q.note ?? null,
-          hasFigure: false,
-          figureData: null,
-          figureObjectPath: null,
-          status: "ai_extracted",
-        }))
-      );
-    }
-
-    const model = proNeeded.length > 0 ? "gemini-2.5-flash + gemini-2.5-pro (hybrid)" : "gemini-2.5-flash";
-
-    await db.update(papersTable).set({
-      fullPdfText: flashResult.fullCleanText || paper.fullPdfText,
-      totalQuestions: questions.length,
-      aiExtractionStatus: "done",
-      aiExtractionError: null,
-      aiExtractionModel: model,
-      aiProcessingStage: null,
-    }).where(eq(papersTable.id, paperId));
-
-    send({
-      stage: "done",
-      message: `Extraction complete! ${questions.length} questions extract aur save ho gaye.`,
-      totalQuestions: questions.length,
-      model,
-      proRefined: proNeeded.length,
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error({ err, paperId }, "AI extraction (SSE) failed");
-    await db.update(papersTable)
-      .set({ aiExtractionStatus: "error", aiExtractionError: msg, aiProcessingStage: null })
-      .where(eq(papersTable.id, paperId));
-    send({ stage: "error", message: msg });
+  // If already done, send done event immediately and exit
+  if (paper.aiExtractionStatus === "done") {
+    send({ stage: "done", message: `${paper.totalQuestions} questions already extracted.`, totalQuestions: paper.totalQuestions, model: paper.aiExtractionModel });
+    res.end();
+    return;
   }
 
-  res.end();
+  // Start background extraction only if not already running
+  if (paper.aiExtractionStatus !== "processing") {
+    await db.update(papersTable)
+      .set({ aiExtractionStatus: "processing", aiExtractionError: null, aiProcessingStage: "flash_extract" })
+      .where(eq(papersTable.id, paperId));
+
+    setImmediate(() => {
+      runAiExtraction(paperId).catch(async (err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error({ err, paperId }, "Background AI extraction failed");
+        await db.update(papersTable)
+          .set({ aiExtractionStatus: "error", aiExtractionError: msg, aiProcessingStage: null })
+          .where(eq(papersTable.id, paperId));
+      });
+    });
+  }
+
+  // Send initial stage message
+  const initialStage = paper.aiProcessingStage ?? "flash_extract";
+  send({ stage: initialStage, message: stageToMessage(initialStage) });
+
+  // Poll DB for status updates and stream them to client
+  let lastStage: string | null = paper.aiProcessingStage;
+  let closed = false;
+
+  const poll = setInterval(async () => {
+    if (closed) { clearInterval(poll); return; }
+    try {
+      const [updated] = await db.select().from(papersTable).where(eq(papersTable.id, paperId));
+      if (!updated) return;
+
+      if (updated.aiExtractionStatus === "done") {
+        clearInterval(poll);
+        send({
+          stage: "done",
+          message: `Extraction complete! ${updated.totalQuestions} questions extract ho gaye.`,
+          totalQuestions: updated.totalQuestions,
+          model: updated.aiExtractionModel,
+        });
+        res.end();
+        return;
+      }
+
+      if (updated.aiExtractionStatus === "error") {
+        clearInterval(poll);
+        send({ stage: "error", message: updated.aiExtractionError ?? "Extraction failed" });
+        res.end();
+        return;
+      }
+
+      // Still processing — send update if stage changed
+      const currentStage = updated.aiProcessingStage;
+      if (currentStage && currentStage !== lastStage) {
+        lastStage = currentStage;
+        send({ stage: currentStage, message: stageToMessage(currentStage) });
+      }
+    } catch {}
+  }, 2000);
+
+  res.on("close", () => {
+    closed = true;
+    clearInterval(poll);
+    // Background extraction continues running even after client disconnects
+  });
 });
 
 router.post("/ai-extract/papers/:id/trigger", async (req, res): Promise<void> => {
