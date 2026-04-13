@@ -2,11 +2,6 @@ import { Router, type IRouter } from "express";
 import multer from "multer";
 import { eq } from "drizzle-orm";
 import { jsonrepair } from "jsonrepair";
-import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { promisify } from "node:util";
 import { db } from "@workspace/db";
 import { papersTable, questionsTable } from "@workspace/db/schema";
 import { ai } from "@workspace/integrations-gemini-ai";
@@ -15,7 +10,6 @@ import { B2StorageService } from "../lib/b2Storage.js";
 
 const router: IRouter = Router();
 const storage = new B2StorageService();
-const execFileAsync = promisify(execFile);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -58,21 +52,21 @@ Return ONLY a valid JSON object in this exact format (no markdown, no code block
   ]
 }`;
 
-const VISION_SYSTEM_PROMPT = `You are an expert at extracting and structuring exam questions from images of Indian competitive exam papers (UPSC, RRB, SSC, JEE, NEET, etc.).
+const VISION_SYSTEM_PROMPT = `You are an expert at extracting and structuring exam questions from Indian competitive exam PDFs (UPSC, RRB, SSC, JEE, NEET, etc.).
 
-You are given images of PDF pages. Carefully read ALL text visible in the images including:
+You are given the full PDF document. Read ALL pages carefully including:
 - Hindi and English text
 - Mathematical formulas and equations
 - Diagrams/figures descriptions
 - Answer options
 
 Your task:
-1. Extract ALL questions visible in the images.
+1. Extract ALL questions from every page of the PDF.
 2. For ALL mathematical expressions: use LaTeX notation ($...$ inline, $$...$$ block).
 3. For each question, identify the subject.
 4. The "note" field: detailed step-by-step solution.
 5. The "correctAnswer" must be one of: "A", "B", "C", or "D".
-6. If a question references a figure/diagram you can see, describe it briefly in the question text in [brackets].
+6. If a question references a figure/diagram, describe it briefly in the question text in [brackets].
 7. Set "needsProReview" to true for complex formula-heavy math questions.
 
 Return ONLY a valid JSON object (no markdown, no code blocks):
@@ -166,35 +160,6 @@ function safeParseGeminiJson<T>(raw: string, finishReason?: string): T {
   }
 }
 
-function isPoorQualityText(text: string): boolean {
-  if (!text || text.trim().length < 300) return true;
-  const cleaned = text.replace(/\s+/g, " ").trim();
-  const totalChars = cleaned.length;
-  if (totalChars < 300) return true;
-  const alphaNumCount = (cleaned.match(/[a-zA-Z0-9\u0900-\u097F]/g) || []).length;
-  const ratio = alphaNumCount / totalChars;
-  return ratio < 0.3;
-}
-
-async function convertPdfPagesToImages(pdfBuffer: Buffer, tempDir: string, maxPages = 20): Promise<string[]> {
-  const pdfPath = path.join(tempDir, "vision-paper.pdf");
-  await writeFile(pdfPath, pdfBuffer);
-
-  const prefix = path.join(tempDir, "vpage");
-  await execFileAsync("pdftoppm", [
-    "-png", "-r", "150",
-    "-l", String(maxPages),
-    pdfPath, prefix,
-  ], { maxBuffer: 200 * 1024 * 1024 });
-
-  const files = (await readdir(tempDir))
-    .filter((f) => f.startsWith("vpage") && f.endsWith(".png"))
-    .sort()
-    .map((f) => path.join(tempDir, f));
-
-  return files;
-}
-
 type ExtractionResult = {
   fullCleanText: string;
   questions: Array<{
@@ -212,70 +177,55 @@ type ExtractionResult = {
 };
 
 async function runVisionExtraction(paperId: number, pdfObjectPath: string): Promise<ExtractionResult> {
-  logger.info({ paperId, pdfObjectPath }, "Starting Gemini Vision extraction");
+  logger.info({ paperId, pdfObjectPath }, "Starting Gemini Vision extraction via Files API");
   await setAiStage(paperId, "vision_downloading_pdf");
 
   const pdfBuffer = await storage.downloadObject(pdfObjectPath);
 
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "qb-vision-"));
+  await setAiStage(paperId, "vision_uploading_to_gemini");
+  logger.info({ paperId, sizeKb: Math.round(pdfBuffer.length / 1024) }, "Uploading PDF to Gemini Files API");
+
+  // Upload PDF directly — no image conversion needed
+  const pdfBlob = new Blob([pdfBuffer], { type: "application/pdf" });
+  const uploadedFile = await withRetry(() => ai.files.upload({
+    file: pdfBlob,
+    config: { mimeType: "application/pdf", displayName: `paper-${paperId}.pdf` },
+  }));
+
+  // Wait for file to be ready (usually instant for PDFs < 20MB)
+  let fileInfo = uploadedFile;
+  let waitMs = 0;
+  while (fileInfo.state === "PROCESSING" && waitMs < 60000) {
+    await new Promise((r) => setTimeout(r, 2000));
+    fileInfo = await ai.files.get({ name: fileInfo.name! });
+    waitMs += 2000;
+  }
+
+  if (fileInfo.state === "FAILED") {
+    await ai.files.delete({ name: fileInfo.name! }).catch(() => {});
+    throw new Error("Gemini Files API: PDF processing failed");
+  }
+
+  logger.info({ paperId, fileName: fileInfo.name, state: fileInfo.state }, "PDF ready in Gemini Files API, starting extraction");
+  await setAiStage(paperId, "vision_extracting");
+
   try {
-    await setAiStage(paperId, "vision_converting_pages");
-    const pageImagePaths = await convertPdfPagesToImages(pdfBuffer, tempDir, 30);
-    logger.info({ paperId, pages: pageImagePaths.length }, "PDF pages converted to images for vision");
+    const response = await withRetry(() => ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [{
+        role: "user",
+        parts: [
+          { fileData: { fileUri: fileInfo.uri!, mimeType: "application/pdf" } },
+          { text: VISION_SYSTEM_PROMPT },
+        ],
+      }],
+      config: { maxOutputTokens: 65536, responseMimeType: "application/json" },
+    }));
 
-    const BATCH_SIZE = 15;
-    const allQuestions: ExtractionResult["questions"] = [];
-    let fullCleanText = "";
-
-    const batches: string[][] = [];
-    for (let i = 0; i < pageImagePaths.length; i += BATCH_SIZE) {
-      batches.push(pageImagePaths.slice(i, i + BATCH_SIZE));
-    }
-
-    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
-      const batchPages = batches[batchIdx];
-      const stageLabel = batches.length > 1
-        ? `vision_batch_${batchIdx + 1}_of_${batches.length}`
-        : "vision_extracting";
-      await setAiStage(paperId, stageLabel);
-
-      const imageParts: { inlineData: { mimeType: string; data: string } }[] = [];
-      for (const imgPath of batchPages) {
-        const imgBuffer = await readFile(imgPath);
-        imageParts.push({
-          inlineData: {
-            mimeType: "image/png",
-            data: imgBuffer.toString("base64"),
-          },
-        });
-      }
-
-      const promptNote = batches.length > 1
-        ? `\n\nNote: This is pages ${batchIdx * BATCH_SIZE + 1}–${Math.min((batchIdx + 1) * BATCH_SIZE, pageImagePaths.length)} of the paper.`
-        : "";
-
-      const response = await withRetry(() => ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: [{
-          role: "user",
-          parts: [
-            ...imageParts,
-            { text: `${VISION_SYSTEM_PROMPT}${promptNote}` },
-          ],
-        }],
-        config: { maxOutputTokens: 65536, responseMimeType: "application/json" },
-      }));
-
-      const finishReason = response.candidates?.[0]?.finishReason;
-      const batchResult = safeParseGeminiJson<ExtractionResult>(response.text ?? "", finishReason);
-
-      if (batchResult.fullCleanText) fullCleanText += (fullCleanText ? "\n\n" : "") + batchResult.fullCleanText;
-      if (Array.isArray(batchResult.questions)) allQuestions.push(...batchResult.questions);
-    }
-
-    return { fullCleanText, questions: allQuestions };
+    const finishReason = response.candidates?.[0]?.finishReason;
+    return safeParseGeminiJson<ExtractionResult>(response.text ?? "", finishReason);
   } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    await ai.files.delete({ name: fileInfo.name! }).catch(() => {});
   }
 }
 
@@ -292,7 +242,7 @@ async function runAiExtraction(paperId: number): Promise<void> {
   }
 
   await db.update(papersTable)
-    .set({ aiExtractionStatus: "processing", aiExtractionError: null, aiProcessingStage: useVision ? "vision_converting_pages" : "flash_extract" })
+    .set({ aiExtractionStatus: "processing", aiExtractionError: null, aiProcessingStage: useVision ? "vision_downloading_pdf" : "flash_extract" })
     .where(eq(papersTable.id, paperId));
 
   let flashResult: ExtractionResult;
@@ -422,17 +372,16 @@ const STAGE_MESSAGES: Record<string, string> = {
   flash_extract: "Gemini 2.5 Flash se text extract ho raha hai...",
   saving: "Questions database mein save ho rahe hain...",
   waiting_retry: "Gemini abhi busy hai — 3 minute mein automatic retry hogi...",
-  vision_downloading_pdf: "Vision mode: PDF download ho raha hai...",
-  vision_converting_pages: "Vision mode: PDF pages images mein convert ho rahe hain...",
-  vision_extracting: "Gemini Vision PDF pages directly padh raha hai...",
+  vision_downloading_pdf: "PDF download ho raha hai...",
+  vision_converting_pages: "PDF process ho raha hai...",
+  vision_uploading_to_gemini: "PDF Gemini Files API mein upload ho raha hai...",
+  vision_extracting: "Gemini Vision puri PDF padh raha hai aur questions extract kar raha hai...",
 };
 
 function stageToMessage(stage: string): string {
   if (STAGE_MESSAGES[stage]) return STAGE_MESSAGES[stage];
   const proMatch = stage.match(/^pro_refine_(\d+)_of_(\d+)$/);
   if (proMatch) return `Pro model: Question ${proMatch[1]} of ${proMatch[2]} refine ho raha hai...`;
-  const visionBatchMatch = stage.match(/^vision_batch_(\d+)_of_(\d+)$/);
-  if (visionBatchMatch) return `Gemini Vision: Batch ${visionBatchMatch[1]} of ${visionBatchMatch[2]} pages process ho rahi hain...`;
   return "Processing...";
 }
 
@@ -474,7 +423,7 @@ router.get("/ai-extract/papers/:id", async (req, res): Promise<void> => {
   if (paper.aiExtractionStatus !== "processing") {
     const willUseVision = hasVision; // Always use Vision when PDF is stored
     await db.update(papersTable)
-      .set({ aiExtractionStatus: "processing", aiExtractionError: null, aiProcessingStage: willUseVision ? "vision_converting_pages" : "flash_extract" })
+      .set({ aiExtractionStatus: "processing", aiExtractionError: null, aiProcessingStage: willUseVision ? "vision_downloading_pdf" : "flash_extract" })
       .where(eq(papersTable.id, paperId));
 
     setImmediate(() => { runWithAutoRestart(paperId); });
