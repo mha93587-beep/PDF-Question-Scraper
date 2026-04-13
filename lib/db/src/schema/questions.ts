@@ -17,6 +17,7 @@ export const papersTable = pgTable("papers", {
   aiExtractionError: text("ai_extraction_error"),
   aiExtractionModel: text("ai_extraction_model"),
   aiProcessingStage: text("ai_processing_stage"),
+  pdfObjectPath: text("pdf_object_path"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

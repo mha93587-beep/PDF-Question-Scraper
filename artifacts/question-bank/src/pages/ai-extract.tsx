@@ -11,7 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Sparkles, Loader2, CheckCircle2, AlertCircle, ChevronDown, ChevronRight,
   Brain, Zap, BookOpen, RefreshCw, FileText, Upload, FileArchive,
-  Clock, XCircle, ListChecks, ScanText, BrainCircuit,
+  Clock, XCircle, ListChecks, ScanText, BrainCircuit, Eye,
 } from "lucide-react";
 import { getListPapersQueryKey, getGetPaperQuestionsQueryKey } from "@workspace/api-client-react";
 
@@ -180,7 +180,17 @@ function SingleStatusRow({ state, onRetryAi, onRemove }: {
                 AI: {latestAiEvent?.message ?? "Processing..."}
               </span>
             )}
-            {state.phase === "done" && <span className="text-green-700">{state.totalQuestions} questions extracted • {state.model}</span>}
+            {state.phase === "done" && (
+              <span className="text-green-700 flex items-center gap-1 flex-wrap">
+                {state.totalQuestions} questions extracted
+                {state.model?.includes("vision") && (
+                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium border border-blue-200">
+                    <Eye className="w-2.5 h-2.5" />Vision
+                  </span>
+                )}
+                <span className="text-muted-foreground">• {state.model}</span>
+              </span>
+            )}
             {state.phase === "error" && <span className="text-red-600 truncate">{state.error}</span>}
           </div>
         </div>
@@ -202,9 +212,10 @@ function SingleStatusRow({ state, onRetryAi, onRemove }: {
       {state.phase === "ai" && state.aiEvents.length > 0 && (
         <div className="border-t border-border bg-purple-50/50 px-4 py-2 space-y-0.5">
           {state.aiEvents.slice(-3).map((e, i) => (
-            <p key={i} className="text-xs text-purple-800">
-              {e.stage === "pro_refine" && <Brain className="w-3 h-3 inline mr-1 text-purple-500" />}
-              {e.stage === "flash_extract" && <Zap className="w-3 h-3 inline mr-1 text-yellow-500" />}
+            <p key={i} className="text-xs text-purple-800 flex items-center gap-1">
+              {e.stage?.startsWith("pro_refine") && <Brain className="w-3 h-3 text-purple-500 shrink-0" />}
+              {e.stage === "flash_extract" && <Zap className="w-3 h-3 text-yellow-500 shrink-0" />}
+              {e.stage?.startsWith("vision") && <Eye className="w-3 h-3 text-blue-500 shrink-0" />}
               {e.message}
             </p>
           ))}
@@ -637,15 +648,16 @@ export default function AiExtractPage() {
           <Sparkles className="w-7 h-7 text-primary" /> AI Extract
         </h1>
         <p className="text-muted-foreground mt-1">
-          PDF upload karein — Gemini AI automatically standard extraction ke baad LaTeX math, clean text aur detailed explanations ke saath questions extract karega.
+          PDF upload karein — Gemini AI automatically standard extraction ke baad LaTeX math, clean text aur detailed explanations ke saath questions extract karega. Image-based PDFs ke liye Vision mode automatic activate hota hai.
         </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { icon: Zap, label: "Gemini 2.5 Flash", desc: "Saare questions ke liye", color: "yellow" },
-          { icon: Brain, label: "Gemini 2.5 Pro", desc: "Complex math/diagrams ke liye", color: "purple" },
-          { icon: BookOpen, label: "LaTeX Rendering", desc: "Math perfectly rendered", color: "blue" },
+          { icon: Eye, label: "Vision Mode", desc: "Image/blurry PDFs ke liye", color: "blue" },
+          { icon: Brain, label: "Gemini 2.5 Pro", desc: "Complex math ke liye", color: "purple" },
+          { icon: BookOpen, label: "LaTeX Rendering", desc: "Math perfectly rendered", color: "green" },
         ].map(({ icon: Icon, label, desc, color }) => (
           <Card key={label} className={`border-${color}-200 bg-${color}-50`}>
             <CardContent className="pt-4 flex items-start gap-2.5">
