@@ -75,6 +75,17 @@ async function setAiStage(paperId: number, stage: string) {
     .where(eq(papersTable.id, paperId));
 }
 
+function safeParseGeminiJson<T>(raw: string): T {
+  let text = raw.trim();
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) text = fenceMatch[1].trim();
+  const objMatch = text.match(/\{[\s\S]*\}/);
+  if (!objMatch) throw new Error("Gemini returned no valid JSON");
+  let jsonStr = objMatch[0];
+  jsonStr = jsonStr.replace(/\\([^"\\/bfnrtu0-9])/g, "\\\\$1");
+  return JSON.parse(jsonStr) as T;
+}
+
 async function runAiExtraction(paperId: number): Promise<void> {
   const [paper] = await db.select().from(papersTable).where(eq(papersTable.id, paperId));
   if (!paper || !paper.fullPdfText || paper.fullPdfText.trim().length < 50) {
@@ -108,13 +119,10 @@ async function runAiExtraction(paperId: number): Promise<void> {
         role: "user",
         parts: [{ text: `${SYSTEM_PROMPT}\n\n---RAW PDF TEXT---\n${paper.fullPdfText.slice(0, 60000)}\n---END---` }],
       }],
-      config: { maxOutputTokens: 8192 },
+      config: { maxOutputTokens: 8192, responseMimeType: "application/json" },
     });
 
-    const raw = response.text ?? "";
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("Gemini Flash returned no valid JSON");
-    flashResult = JSON.parse(jsonMatch[0]);
+    flashResult = safeParseGeminiJson(response.text ?? "");
   } catch (err) {
     throw new Error(`Flash extraction failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -132,15 +140,13 @@ async function runAiExtraction(paperId: number): Promise<void> {
           role: "user",
           parts: [{ text: `${PRO_REFINE_PROMPT}\n\nQuestion:\n${JSON.stringify(q)}` }],
         }],
-        config: { maxOutputTokens: 8192 },
+        config: { maxOutputTokens: 8192, responseMimeType: "application/json" },
       });
-      const raw = response.text ?? "";
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const refined = JSON.parse(jsonMatch[0]);
+      try {
+        const refined = safeParseGeminiJson<Record<string, unknown>>(response.text ?? "");
         const idx = questions.findIndex((x) => x.questionNumber === q.questionNumber);
         if (idx !== -1) questions[idx] = { ...q, ...refined };
-      }
+      } catch {}
     } catch (err) {
       logger.warn({ err, questionNumber: q.questionNumber }, "Pro refinement failed, keeping Flash result");
     }
@@ -215,14 +221,10 @@ router.get("/ai-extract/papers/:id", async (req, res): Promise<void> => {
         role: "user",
         parts: [{ text: `${SYSTEM_PROMPT}\n\n---RAW PDF TEXT---\n${paper.fullPdfText.slice(0, 60000)}\n---END---` }],
       }],
-      config: { maxOutputTokens: 8192 },
+      config: { maxOutputTokens: 8192, responseMimeType: "application/json" },
     });
 
-    const raw2 = response.text ?? "";
-    const jsonMatch = raw2.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("Gemini Flash returned no valid JSON");
-
-    const flashResult = JSON.parse(jsonMatch[0]) as {
+    const flashResult = safeParseGeminiJson<{
       fullCleanText: string;
       questions: Array<{
         questionNumber: number;
@@ -236,7 +238,7 @@ router.get("/ai-extract/papers/:id", async (req, res): Promise<void> => {
         note: string | null;
         needsProReview: boolean;
       }>;
-    };
+    }>(response.text ?? "");
 
     const questions = [...flashResult.questions];
     const proNeeded = questions.filter((q) => q.needsProReview);
@@ -263,15 +265,13 @@ router.get("/ai-extract/papers/:id", async (req, res): Promise<void> => {
             role: "user",
             parts: [{ text: `${PRO_REFINE_PROMPT}\n\nQuestion:\n${JSON.stringify(q)}` }],
           }],
-          config: { maxOutputTokens: 8192 },
+          config: { maxOutputTokens: 8192, responseMimeType: "application/json" },
         });
-        const proRaw = proRes.text ?? "";
-        const proMatch = proRaw.match(/\{[\s\S]*\}/);
-        if (proMatch) {
-          const refined = JSON.parse(proMatch[0]);
+        try {
+          const refined = safeParseGeminiJson<Record<string, unknown>>(proRes.text ?? "");
           const idx = questions.findIndex((x) => x.questionNumber === q.questionNumber);
           if (idx !== -1) questions[idx] = { ...q, ...refined };
-        }
+        } catch {}
       } catch (err) {
         logger.warn({ err, questionNumber: q.questionNumber }, "Pro refinement failed, keeping Flash result");
       }
