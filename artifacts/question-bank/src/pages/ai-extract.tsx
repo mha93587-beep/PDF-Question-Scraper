@@ -131,14 +131,9 @@ type BatchJob = {
 };
 
 const STD_STAGE_LABELS: Record<string, string> = {
-  extracting_text: "Reading PDF",
-  pdftotext: "pdftotext",
-  pdf_parse: "pdf-parse",
-  ocr: "OCR (slow)",
-  parsing_questions: "Parsing Q's",
-  uploading_figures: "Uploading figures",
+  storing_pdf: "Uploading PDF for Vision AI",
   extracting: "Reading ZIP",
-  ai_extracting: "AI Extraction",
+  ai_extracting: "Gemini Vision Processing",
 };
 
 function formatTime(s: number) { return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`; }
@@ -171,7 +166,7 @@ function SingleStatusRow({ state, onRetryAi, onRemove }: {
             {state.phase === "standard" && (
               <span className="text-blue-600 flex items-center gap-0.5">
                 <Loader2 className="w-3 h-3 animate-spin" />
-                Standard extraction: {STD_STAGE_LABELS[state.standardStage ?? ""] ?? state.standardStage ?? "Processing..."}
+                {STD_STAGE_LABELS[state.standardStage ?? ""] ?? state.standardStage ?? "Preparing for Vision AI..."}
               </span>
             )}
             {state.phase === "ai" && (
@@ -243,7 +238,6 @@ function BatchItemRow({ item }: { item: BatchItemType }) {
     return <Clock className="w-4 h-4 text-muted-foreground" />;
   };
   const stage = item.processingStage ? STD_STAGE_LABELS[item.processingStage] ?? item.processingStage : null;
-  const isOcr = item.processingStage === "ocr";
 
   return (
     <div className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-sm border ${
@@ -256,8 +250,8 @@ function BatchItemRow({ item }: { item: BatchItemType }) {
       <div className="flex-1 min-w-0">
         <p className="font-medium truncate">{item.fileName}</p>
         {item.status === "processing" && stage && (
-          <p className={`text-xs mt-0.5 ${isOcr ? "text-amber-600" : "text-blue-600"}`}>
-            {isOcr ? "⏳ " : ""}{stage}{isOcr ? " — 3–8 min" : "..."}
+          <p className="text-xs mt-0.5 text-blue-600">
+            {stage}...
           </p>
         )}
         {item.status === "error" && item.error && <p className="text-xs text-red-600 truncate">{item.error}</p>}
@@ -648,14 +642,14 @@ export default function AiExtractPage() {
           <Sparkles className="w-7 h-7 text-primary" /> AI Extract
         </h1>
         <p className="text-muted-foreground mt-1">
-          PDF upload karein — Gemini AI automatically standard extraction ke baad LaTeX math, clean text aur detailed explanations ke saath questions extract karega. Image-based PDFs ke liye Vision mode automatic activate hota hai.
+          PDF upload karein — Gemini Vision AI directly PDF pages padh kar LaTeX math, clean text aur detailed explanations ke saath questions extract karega. Har PDF ke liye Vision mode use hota hai — koi bhi normal OCR nahi.
         </p>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { icon: Zap, label: "Gemini 2.5 Flash", desc: "Saare questions ke liye", color: "yellow" },
-          { icon: Eye, label: "Vision Mode", desc: "Image/blurry PDFs ke liye", color: "blue" },
+          { icon: Eye, label: "Vision Mode", desc: "Har PDF ke liye — Always ON", color: "blue" },
           { icon: Brain, label: "Gemini 2.5 Pro", desc: "Complex math ke liye", color: "purple" },
           { icon: BookOpen, label: "LaTeX Rendering", desc: "Math perfectly rendered", color: "green" },
         ].map(({ icon: Icon, label, desc, color }) => (
@@ -724,7 +718,7 @@ export default function AiExtractPage() {
                 {isUploading ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Uploading...</> : <><Sparkles className="w-4 h-4 mr-2" />Upload aur AI Extract Karein</>}
               </Button>
               <p className="text-xs text-muted-foreground text-center">
-                PDF upload hogi → standard text extraction → phir automatic AI extraction with LaTeX
+                PDF upload hogi → Gemini Vision AI se direct extraction → LaTeX math ke saath questions
               </p>
             </div>
           )}

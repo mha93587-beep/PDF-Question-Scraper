@@ -11,7 +11,6 @@ import { db } from "@workspace/db";
 import { papersTable, questionsTable } from "@workspace/db/schema";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { logger } from "../lib/logger";
-import { parsePdfText } from "../lib/pdf-parser.js";
 import { B2StorageService } from "../lib/b2Storage.js";
 
 const router: IRouter = Router();
@@ -284,11 +283,12 @@ async function runAiExtraction(paperId: number): Promise<void> {
   const [paper] = await db.select().from(papersTable).where(eq(papersTable.id, paperId));
   if (!paper) throw new Error("Paper not found.");
 
-  const useVision = !!paper.pdfObjectPath && (isPoorQualityText(paper.fullPdfText ?? ""));
+  // Always use Gemini Vision when a stored PDF is available (AI Extract always stores PDF)
+  const useVision = !!paper.pdfObjectPath;
   const hasText = paper.fullPdfText && paper.fullPdfText.trim().length >= 50;
 
   if (!useVision && !hasText) {
-    throw new Error("Paper has no extracted text and no stored PDF for vision extraction.");
+    throw new Error("Paper has no stored PDF for Vision extraction. Please re-upload.");
   }
 
   await db.update(papersTable)
@@ -472,7 +472,7 @@ router.get("/ai-extract/papers/:id", async (req, res): Promise<void> => {
   }
 
   if (paper.aiExtractionStatus !== "processing") {
-    const willUseVision = hasVision && isPoorQualityText(paper.fullPdfText ?? "");
+    const willUseVision = hasVision; // Always use Vision when PDF is stored
     await db.update(papersTable)
       .set({ aiExtractionStatus: "processing", aiExtractionError: null, aiProcessingStage: willUseVision ? "vision_converting_pages" : "flash_extract" })
       .where(eq(papersTable.id, paperId));
@@ -554,73 +554,30 @@ router.post("/ai-extract/upload", upload.single("file"), async (req, res): Promi
     totalQuestions: 0,
     fileName: req.file.originalname,
     processingStatus: "processing",
+    processingStage: "storing_pdf",
   }).returning();
 
   const fileBuffer = req.file.buffer;
 
   setImmediate(async () => {
     try {
-      await db.update(papersTable).set({ processingStage: "extracting_text" }).where(eq(papersTable.id, paper.id));
-      const result = await parsePdfText(fileBuffer, (stage) =>
-        db.update(papersTable).set({ processingStage: stage }).where(eq(papersTable.id, paper.id))
-      );
-
-      await db.update(papersTable).set({ processingStage: "uploading_figures" }).where(eq(papersTable.id, paper.id));
-      const figureObjectPaths = new Map<number, string>();
-      for (const q of result.questions) {
-        if (!q.figureBuffer) continue;
-        try {
-          const key = `question-snapshots/${paper.id}/${q.questionNumber}.jpg`;
-          const objectPath = await storage.uploadBuffer(key, q.figureBuffer, "image/jpeg");
-          figureObjectPaths.set(q.questionNumber, objectPath);
-        } catch {}
-      }
-
-      // Store the original PDF to B2 so vision extraction can use it later
-      let pdfObjectPath: string | null = null;
-      try {
-        await db.update(papersTable).set({ processingStage: "storing_pdf" }).where(eq(papersTable.id, paper.id));
-        const pdfKey = `papers/${paper.id}/original.pdf`;
-        pdfObjectPath = await storage.uploadBuffer(pdfKey, fileBuffer, "application/pdf");
-        logger.info({ paperId: paper.id, pdfObjectPath }, "Original PDF stored to B2 for vision extraction");
-      } catch (err) {
-        logger.warn({ err, paperId: paper.id }, "Failed to store PDF to B2 — vision mode will not be available");
-      }
-
-      if (result.questions.length > 0) {
-        await db.insert(questionsTable).values(
-          result.questions.map((q) => ({
-            paperId: paper.id,
-            questionNumber: q.questionNumber,
-            questionIdOriginal: q.questionIdOriginal,
-            questionText: q.questionText,
-            optionA: q.optionA,
-            optionB: q.optionB,
-            optionC: q.optionC,
-            optionD: q.optionD,
-            correctAnswer: q.correctAnswer,
-            chosenOption: q.chosenOption,
-            status: q.status,
-            hasFigure: q.hasFigure,
-            figureData: null,
-            figureObjectPath: figureObjectPaths.get(q.questionNumber) ?? null,
-            note: q.note,
-          }))
-        );
-      }
+      // Skip old OCR pipeline — store PDF directly to B2 for Gemini Vision extraction
+      const pdfKey = `papers/${paper.id}/original.pdf`;
+      const pdfObjectPath = await storage.uploadBuffer(pdfKey, fileBuffer, "application/pdf");
+      logger.info({ paperId: paper.id, pdfObjectPath }, "PDF stored to B2 for Gemini Vision extraction");
 
       await db.update(papersTable).set({
-        totalQuestions: result.questions.length,
-        fullPdfText: result.fullPdfText,
         processingStatus: "done",
         processingStage: null,
         pdfObjectPath,
+        fullPdfText: "",
       }).where(eq(papersTable.id, paper.id));
 
     } catch (err) {
+      logger.error({ err, paperId: paper.id }, "Failed to store PDF to B2 for Vision extraction");
       await db.update(papersTable).set({
         processingStatus: "error",
-        processingError: String(err),
+        processingError: `Failed to store PDF for AI Vision extraction: ${String(err)}`,
         processingStage: null,
       }).where(eq(papersTable.id, paper.id));
     }
