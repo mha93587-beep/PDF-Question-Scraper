@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import multer from "multer";
 import { eq } from "drizzle-orm";
+import { jsonrepair } from "jsonrepair";
 import { db } from "@workspace/db";
 import { papersTable, questionsTable } from "@workspace/db/schema";
 import { ai } from "@workspace/integrations-gemini-ai";
@@ -75,15 +76,44 @@ async function setAiStage(paperId: number, stage: string) {
     .where(eq(papersTable.id, paperId));
 }
 
-function safeParseGeminiJson<T>(raw: string): T {
+async function withRetry<T>(fn: () => Promise<T>, retries = 4, delayMs = 5000): Promise<T> {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const is503 = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.includes("high demand");
+      if (is503 && i < retries) {
+        const wait = delayMs * Math.pow(2, i);
+        logger.warn({ attempt: i + 1, waitMs: wait }, "Gemini 503, retrying...");
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Max retries exceeded");
+}
+
+function safeParseGeminiJson<T>(raw: string, finishReason?: string): T {
+  if (!raw || raw.trim().length === 0) {
+    throw new Error(`Gemini returned empty response (finishReason: ${finishReason ?? "unknown"})`);
+  }
+  if (finishReason === "MAX_TOKENS") {
+    throw new Error("Gemini response was cut off — output too long. Paper may have too many questions for a single call.");
+  }
   let text = raw.trim();
   const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenceMatch) text = fenceMatch[1].trim();
   const objMatch = text.match(/\{[\s\S]*\}/);
-  if (!objMatch) throw new Error("Gemini returned no valid JSON");
-  let jsonStr = objMatch[0];
-  jsonStr = jsonStr.replace(/\\([^"\\/bfnrtu0-9])/g, "\\\\$1");
-  return JSON.parse(jsonStr) as T;
+  if (!objMatch) throw new Error(`Gemini returned no valid JSON. Response starts with: "${text.slice(0, 100)}"`);
+  const jsonStr = objMatch[0];
+  try {
+    return JSON.parse(jsonStr) as T;
+  } catch {
+    const repaired = jsonrepair(jsonStr);
+    return JSON.parse(repaired) as T;
+  }
 }
 
 async function runAiExtraction(paperId: number): Promise<void> {
@@ -113,16 +143,17 @@ async function runAiExtraction(paperId: number): Promise<void> {
   };
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await withRetry(() => ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: [{
         role: "user",
         parts: [{ text: `${SYSTEM_PROMPT}\n\n---RAW PDF TEXT---\n${paper.fullPdfText.slice(0, 60000)}\n---END---` }],
       }],
-      config: { maxOutputTokens: 8192, responseMimeType: "application/json" },
-    });
+      config: { maxOutputTokens: 65536, responseMimeType: "application/json" },
+    }));
 
-    flashResult = safeParseGeminiJson(response.text ?? "");
+    const finishReason = response.candidates?.[0]?.finishReason;
+    flashResult = safeParseGeminiJson(response.text ?? "", finishReason);
   } catch (err) {
     throw new Error(`Flash extraction failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -215,15 +246,16 @@ router.get("/ai-extract/papers/:id", async (req, res): Promise<void> => {
   send({ stage: "flash_extract", message: "Gemini 2.5 Flash se text extract ho raha hai..." });
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await withRetry(() => ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: [{
         role: "user",
         parts: [{ text: `${SYSTEM_PROMPT}\n\n---RAW PDF TEXT---\n${paper.fullPdfText.slice(0, 60000)}\n---END---` }],
       }],
-      config: { maxOutputTokens: 8192, responseMimeType: "application/json" },
-    });
+      config: { maxOutputTokens: 65536, responseMimeType: "application/json" },
+    }));
 
+    const flashFinishReason = response.candidates?.[0]?.finishReason;
     const flashResult = safeParseGeminiJson<{
       fullCleanText: string;
       questions: Array<{
@@ -238,7 +270,7 @@ router.get("/ai-extract/papers/:id", async (req, res): Promise<void> => {
         note: string | null;
         needsProReview: boolean;
       }>;
-    }>(response.text ?? "");
+    }>(response.text ?? "", flashFinishReason);
 
     const questions = [...flashResult.questions];
     const proNeeded = questions.filter((q) => q.needsProReview);
