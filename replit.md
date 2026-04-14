@@ -79,6 +79,16 @@ A new **AI Extract** tab uses Google Gemini AI with a hybrid strategy to clean u
 - `pnpm --filter @workspace/db run push` — push DB schema changes to Neon DB
 - `pnpm --filter @workspace/question-bank run build:cf` — build for Cloudflare Pages deployment
 
+## Replit Runtime
+
+- Replit services are registered as separate artifacts:
+  - `artifacts/question-bank` serves the React frontend at `/`
+  - `artifacts/api-server` serves the Express API at `/api`
+  - `artifacts/mockup-sandbox` serves canvas/component previews at `/__mockup`
+- The frontend Vite dev server requires `PORT` and `BASE_PATH`, allows Replit preview hosts, and proxies `/api` requests to the API server on port `8080`.
+- Gemini access is provisioned through Replit AI integration environment variables (`AI_INTEGRATIONS_GEMINI_BASE_URL`, `AI_INTEGRATIONS_GEMINI_API_KEY`), while still supporting a user-provided `GEMINI_API_KEY` if present.
+- The legacy combined `Start application` workflow was removed to avoid duplicate frontend/API processes and port conflicts.
+
 ## Key Files
 
 - `lib/db/src/schema/questions.ts` — Database schema (papers + questions tables)
