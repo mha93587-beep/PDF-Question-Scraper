@@ -22,7 +22,7 @@ A full-stack web application that scrapes previous year question papers from PDF
 
 ### PDF Processing Pipeline
 1. **PDF Upload** - User uploads PDF via the web interface or processes pre-attached files
-2. **Text Extraction** - `pdftotext -layout` extracts raw text from PDF, with `pdf-parse` fallback (Replit) / `unpdf` (CF Pages)
+2. **Text Extraction** - Datalab Marker API can convert PDFs to markdown for high-quality extraction; local fallback uses `pdftotext -layout`, `pdf-parse`, and OCR (Replit) / `unpdf` (CF Pages)
 3. **Format Detection** - Auto-detects PDF format (2016 style vs 2025 style)
 4. **Question Parsing** - Regex-based parser extracts questions, options, answers
 5. **Figure Capture** (Replit only) - Each question is cropped from the original PDF using pdftoppm + ImageMagick; watermarks removed via `-level 5%,78%`
@@ -50,6 +50,13 @@ A full-stack web application that scrapes previous year question papers from PDF
 - Required config: `B2_BUCKET`, `B2_REGION` or `B2_ENDPOINT`; required secrets: `B2_KEY_ID`, `B2_APPLICATION_KEY`
 - Server files: `artifacts/api-server/src/lib/b2Storage.ts`, `routes/storage.ts`, `routes/batch.ts`
 - Client lib: `lib/object-storage-web/`
+
+### Marker API Integration
+- Upload page supports selecting **Marker API** or **Local OCR** as the extraction engine.
+- Marker uses Datalab's current `POST /api/v1/convert` endpoint, then polls `request_check_url` until conversion is complete.
+- Required secret: `MARKER_API_KEY` (or `DATALAB_API_KEY` as a fallback name).
+- Server files: `artifacts/api-server/src/lib/marker.ts`, `artifacts/api-server/src/routes/marker.ts`, and `artifacts/api-server/src/routes/papers.ts`.
+- Health check: `GET /api/marker/health` checks Marker availability without exposing the key.
 
 ## AI Extract (Gemini Integration)
 

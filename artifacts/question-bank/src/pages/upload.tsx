@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useUploadPaper, useProcessAttachedPdf, getListPapersQueryKey, getGetQuestionStatsQueryKey } from "@workspace/api-client-react";
+import { useProcessAttachedPdf, getListPapersQueryKey, getGetQuestionStatsQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,8 @@ import { Upload, FileText, Loader2, CheckCircle2, AlertCircle, Clock, ScanText, 
 const STORAGE_KEY_UPLOAD = "qb_active_upload_paper";
 const STORAGE_KEY_ATTACHED = "qb_active_attached_paper";
 
-type Stage = "extracting_text" | "pdftotext" | "pdf_parse" | "ocr" | "parsing_questions" | null;
+type Stage = "extracting_text" | "pdftotext" | "pdf_parse" | "ocr" | "parsing_questions" | "marker_uploading" | "marker_parsing_questions" | null;
+type ExtractionProvider = "local" | "marker";
 
 const STAGE_INFO: Record<NonNullable<Stage>, { label: string; description: string; icon: React.ElementType }> = {
   extracting_text: { label: "Reading PDF...", description: "Opening the PDF file and attempting text extraction.", icon: FileSearch },
@@ -19,6 +20,8 @@ const STAGE_INFO: Record<NonNullable<Stage>, { label: string; description: strin
   pdf_parse:       { label: "Trying JS Parser (pdf-parse)", description: "pdftotext got little text — trying an alternate JS-based PDF parser.", icon: ScanText },
   ocr:             { label: "Running Full OCR (Tesseract)", description: "This is a scanned/image-based PDF. Rendering every page and running OCR. This takes 3–8 minutes for a 100-page paper.", icon: BrainCircuit },
   parsing_questions: { label: "Parsing Questions", description: "Text extracted! Now identifying questions, options, and answers from the text.", icon: ListChecks },
+  marker_uploading: { label: "Sending PDF to Marker", description: "Uploading the document to Datalab Marker for high-quality conversion.", icon: BrainCircuit },
+  marker_parsing_questions: { label: "Parsing Marker Output", description: "Marker returned markdown. Now identifying questions, options, and answers.", icon: ListChecks },
 };
 
 type ProcessingState = {
@@ -71,7 +74,7 @@ function useProcessingPoller(
 
     const poll = async () => {
       try {
-        const res = await fetch(`/api/papers/${paperId}`);
+        const res = await fetch(`${import.meta.env.BASE_URL}api/papers/${paperId}`);
         if (!res.ok) return;
         const paper = await res.json();
         const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
@@ -109,7 +112,11 @@ function formatTime(secs: number) {
 }
 
 function StageIndicator({ stage, elapsed }: { stage: Stage; elapsed: number }) {
-  const stages: Array<{ key: NonNullable<Stage>; shortLabel: string }> = [
+  const isMarker = stage?.startsWith("marker") ?? false;
+  const stages: Array<{ key: NonNullable<Stage>; shortLabel: string }> = isMarker ? [
+    { key: "marker_uploading", shortLabel: "Marker" },
+    { key: "marker_parsing_questions", shortLabel: "Parsing" },
+  ] : [
     { key: "pdftotext", shortLabel: "pdftotext" },
     { key: "pdf_parse", shortLabel: "pdf-parse" },
     { key: "ocr", shortLabel: "OCR" },
@@ -173,6 +180,8 @@ export default function UploadPage() {
   const [examName, setExamName] = useState("");
   const [year, setYear] = useState("");
   const [shift, setShift] = useState("");
+  const [extractionProvider, setExtractionProvider] = useState<ExtractionProvider>("marker");
+  const [uploadPending, setUploadPending] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -217,13 +226,6 @@ export default function UploadPage() {
     }
   );
 
-  const uploadMutation = useUploadPaper({
-    mutation: {
-      onSuccess: (data) => setActivePaperId(data.paperId),
-      onError: () => toast({ title: "Upload Failed", description: "Failed to upload the PDF. Please try again.", variant: "destructive" }),
-    },
-  });
-
   const processAttachedMutation = useProcessAttachedPdf({
     mutation: {
       onSuccess: (data) => setAttachedPaperId(data.paperId),
@@ -231,12 +233,38 @@ export default function UploadPage() {
     },
   });
 
-  const handleUpload = () => {
+  const handleUpload = async () => {
     if (!file || !examName) return;
-    uploadMutation.mutate({ data: { file, examName, ...(year ? { year } : {}), ...(shift ? { shift } : {}) } });
+    setUploadPending(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("examName", examName);
+      formData.append("provider", extractionProvider);
+      if (year) formData.append("year", year);
+      if (shift) formData.append("shift", shift);
+
+      const response = await fetch(`${import.meta.env.BASE_URL}api/papers/upload`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to upload the PDF. Please try again.");
+      }
+      setActivePaperId(data.paperId);
+    } catch (err) {
+      toast({
+        title: "Upload Failed",
+        description: err instanceof Error ? err.message : "Failed to upload the PDF. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setUploadPending(false);
+    }
   };
 
-  const isUploadBusy = uploadMutation.isPending || uploadState?.status === "processing";
+  const isUploadBusy = uploadPending || uploadState?.status === "processing";
   const isAttachedBusy = processAttachedMutation.isPending || attachedState?.status === "processing";
 
   const attachedPdfs = [
@@ -298,13 +326,43 @@ export default function UploadPage() {
             </div>
           </div>
 
+          <div className="space-y-2">
+            <Label>Extraction Engine</Label>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Button
+                type="button"
+                variant={extractionProvider === "marker" ? "default" : "outline"}
+                className="h-auto justify-start p-4"
+                disabled={isUploadBusy}
+                onClick={() => setExtractionProvider("marker")}
+              >
+                <div className="text-left">
+                  <div className="font-semibold">Marker API</div>
+                  <div className="text-xs opacity-80">Best for scanned PDFs, math, tables, and complex layouts.</div>
+                </div>
+              </Button>
+              <Button
+                type="button"
+                variant={extractionProvider === "local" ? "default" : "outline"}
+                className="h-auto justify-start p-4"
+                disabled={isUploadBusy}
+                onClick={() => setExtractionProvider("local")}
+              >
+                <div className="text-left">
+                  <div className="font-semibold">Local OCR</div>
+                  <div className="text-xs opacity-80">Runs inside Replit using pdftotext, pdf-parse, and OCR.</div>
+                </div>
+              </Button>
+            </div>
+          </div>
+
           <Button onClick={handleUpload} disabled={!file || !examName || isUploadBusy} className="w-full" size="lg">
-            {uploadMutation.isPending ? (
+            {uploadPending ? (
               <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Uploading...</>
             ) : uploadState?.status === "processing" ? (
               <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Processing... ({formatTime(uploadState.elapsedSeconds)})</>
             ) : (
-              <><Upload className="w-4 h-4 mr-2" />Upload and Extract Questions</>
+              <><Upload className="w-4 h-4 mr-2" />Upload and Extract with {extractionProvider === "marker" ? "Marker" : "Local OCR"}</>
             )}
           </Button>
 
@@ -342,7 +400,7 @@ export default function UploadPage() {
                   <span className="font-medium">{pdf.name}</span>
                 </div>
                 <Button variant="outline" size="sm" disabled={isAttachedBusy}
-                  onClick={() => processAttachedMutation.mutate({ id: 0, data: { filePath: pdf.path } })}>
+                  onClick={() => processAttachedMutation.mutate({ id: 0, data: { filePath: pdf.path, provider: extractionProvider } })}>
                   {isAttachedBusy ? (
                     <span className="flex items-center gap-1.5">
                       <Loader2 className="w-3 h-3 animate-spin" />

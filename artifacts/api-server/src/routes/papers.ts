@@ -5,9 +5,10 @@ import path from "path";
 import { eq, count } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { papersTable, questionsTable, batchItemsTable } from "@workspace/db/schema";
-import { parsePdfText, type ParseResult } from "../lib/pdf-parser";
+import { parseExtractedQuestionText, parsePdfText, type ParseResult } from "../lib/pdf-parser";
 import { logger } from "../lib/logger";
 import { B2StorageService } from "../lib/b2Storage.js";
+import { convertPdfWithMarker } from "../lib/marker.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -23,6 +24,7 @@ const upload = multer({
 
 const router: IRouter = Router();
 const storage = new B2StorageService();
+type ExtractionProvider = "local" | "marker";
 
 async function uploadQuestionFiguresToB2(
   paperId: number,
@@ -54,10 +56,33 @@ async function setStage(paperId: number, stage: string) {
   await db.update(papersTable).set({ processingStage: stage }).where(eq(papersTable.id, paperId));
 }
 
-async function processPdfAndSave(paperId: number, pdfBuffer: Buffer, fileName: string): Promise<void> {
+async function processPdfAndSave(
+  paperId: number,
+  pdfBuffer: Buffer,
+  fileName: string,
+  provider: ExtractionProvider = "local"
+): Promise<void> {
   try {
-    await setStage(paperId, "extracting_text");
-    const result = await parsePdfText(pdfBuffer, (stage) => setStage(paperId, stage));
+    let result: ParseResult;
+
+    if (provider === "marker") {
+      await setStage(paperId, "marker_uploading");
+      const markerResult = await convertPdfWithMarker(pdfBuffer, fileName);
+      await setStage(paperId, "marker_parsing_questions");
+      result = parseExtractedQuestionText(markerResult.markdown);
+      logger.info(
+        {
+          paperId,
+          pageCount: markerResult.pageCount,
+          parseQualityScore: markerResult.parseQualityScore,
+          runtime: markerResult.runtime,
+        },
+        "Marker conversion completed"
+      );
+    } else {
+      await setStage(paperId, "extracting_text");
+      result = await parsePdfText(pdfBuffer, (stage) => setStage(paperId, stage));
+    }
 
     await setStage(paperId, "uploading_figures");
     const figureObjectPaths = await uploadQuestionFiguresToB2(paperId, result.questions);
@@ -93,7 +118,7 @@ async function processPdfAndSave(paperId: number, pdfBuffer: Buffer, fileName: s
       })
       .where(eq(papersTable.id, paperId));
 
-    logger.info({ paperId, totalQuestions: result.questions.length, figuresUploaded: figureObjectPaths.size }, "Paper processed successfully");
+    logger.info({ paperId, totalQuestions: result.questions.length, figuresUploaded: figureObjectPaths.size, provider }, "Paper processed successfully");
   } catch (err) {
     logger.error({ err, paperId }, "PDF processing failed");
     await db.update(papersTable)
@@ -109,6 +134,7 @@ router.post("/papers/upload", upload.single("file"), async (req, res): Promise<v
   }
 
   const { examName, year, shift } = req.body;
+  const provider = req.body.provider === "marker" ? "marker" : "local";
   if (!examName) {
     res.status(400).json({ error: "examName is required" });
     return;
@@ -127,7 +153,7 @@ router.post("/papers/upload", upload.single("file"), async (req, res): Promise<v
 
   const fileBuffer = req.file.buffer;
   setImmediate(() => {
-    processPdfAndSave(paper.id, fileBuffer, req.file!.originalname);
+    processPdfAndSave(paper.id, fileBuffer, req.file!.originalname, provider);
   });
 
   res.json({
@@ -135,7 +161,7 @@ router.post("/papers/upload", upload.single("file"), async (req, res): Promise<v
     paperId: paper.id,
     processing: true,
     totalQuestions: 0,
-    message: `PDF uploaded successfully. Extracting questions in background...`,
+    message: `PDF uploaded successfully. Extracting questions in background with ${provider === "marker" ? "Marker" : "local OCR"}...`,
   });
 });
 
@@ -149,6 +175,7 @@ router.post("/papers/:id/process-attached", async (req, res): Promise<void> => {
   }
 
   const { filePath } = req.body;
+  const provider = req.body.provider === "marker" ? "marker" : "local";
   if (!filePath) {
     res.status(400).json({ error: "filePath is required" });
     return;
@@ -178,7 +205,7 @@ router.post("/papers/:id/process-attached", async (req, res): Promise<void> => {
 
   const paperId2 = paper.id;
   setImmediate(() => {
-    processPdfAndSave(paperId2, buffer, attachedFileName);
+    processPdfAndSave(paperId2, buffer, attachedFileName, provider);
   });
 
   res.json({
@@ -186,7 +213,7 @@ router.post("/papers/:id/process-attached", async (req, res): Promise<void> => {
     paperId: paper.id,
     processing: true,
     totalQuestions: 0,
-    message: `PDF queued for processing. Questions will be extracted shortly.`,
+    message: `PDF queued for processing with ${provider === "marker" ? "Marker" : "local OCR"}. Questions will be extracted shortly.`,
   });
 });
 

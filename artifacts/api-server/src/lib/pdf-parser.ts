@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
-interface ParsedQuestion {
+export interface ParsedQuestion {
   questionNumber: number;
   questionIdOriginal: string | null;
   questionText: string;
@@ -661,6 +661,40 @@ function parse2025Format(text: string, visualsByQuestion: Map<number, QuestionVi
   return questions;
 }
 
+function parseQuestionsFromExtractedText(
+  text: string,
+  visualsByQuestion: Map<number, QuestionVisual>
+): ParseResult {
+  const format = detectFormat(text);
+  logger.info({ format }, "Detected PDF format");
+
+  let questions: ParsedQuestion[];
+
+  if (format === "format_2016") {
+    questions = parse2016Format(text, visualsByQuestion);
+  } else if (format === "format_2025") {
+    questions = parse2025Format(text, visualsByQuestion);
+  } else {
+    questions = parse2025Format(text, visualsByQuestion);
+    if (questions.length === 0) {
+      questions = parse2016Format(text, visualsByQuestion);
+    }
+  }
+
+  logger.info({ questionsFound: questions.length, questionImagesFound: questions.filter((q) => q.figureBuffer).length, ocrCropsProcessed: visualsByQuestion.size }, "Questions parsed");
+
+  return {
+    questions,
+    examName: extractExamName(text),
+    detectedFormat: format,
+    fullPdfText: text,
+  };
+}
+
+export function parseExtractedQuestionText(text: string): ParseResult {
+  return parseQuestionsFromExtractedText(text, new Map());
+}
+
 export async function parsePdfText(
   pdfBuffer: Buffer,
   onStage?: (stage: string) => Promise<void>
@@ -734,30 +768,7 @@ export async function parsePdfText(
       }
     }
 
-    const format = detectFormat(text);
-    logger.info({ format }, "Detected PDF format");
-
-    let questions: ParsedQuestion[];
-
-    if (format === "format_2016") {
-      questions = parse2016Format(text, visualsByQuestion);
-    } else if (format === "format_2025") {
-      questions = parse2025Format(text, visualsByQuestion);
-    } else {
-      questions = parse2025Format(text, visualsByQuestion);
-      if (questions.length === 0) {
-        questions = parse2016Format(text, visualsByQuestion);
-      }
-    }
-
-    logger.info({ questionsFound: questions.length, questionImagesFound: questions.filter((q) => q.figureBuffer).length, ocrCropsProcessed: visualsByQuestion.size }, "Questions parsed");
-
-    return {
-      questions,
-      examName: extractExamName(text),
-      detectedFormat: format,
-      fullPdfText: text,
-    };
+    return parseQuestionsFromExtractedText(text, visualsByQuestion);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
