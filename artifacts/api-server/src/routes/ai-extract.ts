@@ -117,6 +117,13 @@ function isRetriableError(msg: string): { is503: boolean; is429: boolean } {
   return { is503, is429 };
 }
 
+function parseRetryDelay(msg: string): number {
+  // Gemini returns "Please retry in 40.000185123s" — parse it
+  const match = msg.match(/retry in ([\d.]+)s/i);
+  if (match) return Math.ceil(parseFloat(match[1]) * 1000) + 2000;
+  return 65000; // default: 65s covers the 60s TPM window
+}
+
 async function withRetry<T>(fn: () => Promise<T>, retries = 8): Promise<T> {
   for (let i = 0; i <= retries; i++) {
     try {
@@ -125,9 +132,8 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 8): Promise<T> {
       const msg = err instanceof Error ? err.message : String(err);
       const { is503, is429 } = isRetriableError(msg);
       if ((is503 || is429) && i < retries) {
-        // 429 = quota/TPM window (60s). Wait 65s fixed so the window resets.
-        // 503 = model overloaded. Wait 15s and try again (transient).
-        const wait = is429 ? 65000 : 15000;
+        // Use the retry delay from the API response, or fallback to sensible defaults
+        const wait = is429 ? parseRetryDelay(msg) : 15000;
         logger.warn({ attempt: i + 1, waitMs: wait, is429, is503 }, "Gemini error, retrying after wait...");
         await new Promise((r) => setTimeout(r, wait));
         continue;
@@ -210,7 +216,7 @@ async function runVisionExtraction(paperId: number, pdfObjectPath: string): Prom
 
   try {
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.5-flash-lite",
       contents: [{
         role: "user",
         parts: [
@@ -255,7 +261,7 @@ async function runAiExtraction(paperId: number): Promise<void> {
   } else {
     try {
       const response = await withRetry(() => ai.models.generateContent({
-        model: "gemini-2.0-flash",
+        model: "gemini-2.5-flash-lite",
         contents: [{
           role: "user",
           parts: [{ text: `${SYSTEM_PROMPT}\n\n---RAW PDF TEXT---\n${paper.fullPdfText!.slice(0, 60000)}\n---END---` }],
@@ -320,8 +326,8 @@ async function runAiExtraction(paperId: number): Promise<void> {
   }
 
   const modeLabel = useVision
-    ? (proNeeded.length > 0 ? "gemini-2.0-flash (vision) + gemini-2.5-pro (hybrid)" : "gemini-2.0-flash (vision)")
-    : (proNeeded.length > 0 ? "gemini-2.0-flash + gemini-2.5-pro (hybrid)" : "gemini-2.0-flash");
+    ? (proNeeded.length > 0 ? "gemini-2.5-flash-lite (vision) + gemini-2.5-pro (hybrid)" : "gemini-2.5-flash-lite (vision)")
+    : (proNeeded.length > 0 ? "gemini-2.5-flash-lite + gemini-2.5-pro (hybrid)" : "gemini-2.5-flash-lite");
 
   await db.update(papersTable).set({
     fullPdfText: flashResult.fullCleanText || paper.fullPdfText,
