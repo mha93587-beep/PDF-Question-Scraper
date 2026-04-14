@@ -165,6 +165,36 @@ function safeParseGeminiJson<T>(raw: string, finishReason?: string): T {
   }
 }
 
+// For chunked extraction: try to recover partial JSON even if cut off
+function safeParseGeminiJsonPartial<T extends { questions: unknown[] }>(raw: string): T {
+  if (!raw || raw.trim().length === 0) {
+    return { fullCleanText: "", questions: [] } as unknown as T;
+  }
+  let text = raw.trim();
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) text = fenceMatch[1].trim();
+  // Try full parse first
+  const objMatch = text.match(/\{[\s\S]*\}/);
+  if (objMatch) {
+    try {
+      return JSON.parse(objMatch[0]) as T;
+    } catch {
+      try {
+        return JSON.parse(jsonrepair(objMatch[0])) as T;
+      } catch {}
+    }
+  }
+  // Partial recovery: extract whatever questions array we can find
+  const questionsMatch = text.match(/"questions"\s*:\s*\[[\s\S]*/);
+  if (questionsMatch) {
+    try {
+      const partial = `{"fullCleanText":"","questions":${questionsMatch[0].replace(/^"questions"\s*:\s*/, "")}`;
+      return JSON.parse(jsonrepair(partial)) as T;
+    } catch {}
+  }
+  return { fullCleanText: "", questions: [] } as unknown as T;
+}
+
 type ExtractionResult = {
   fullCleanText: string;
   questions: Array<{
@@ -181,23 +211,41 @@ type ExtractionResult = {
   }>;
 };
 
-async function runVisionExtraction(paperId: number, pdfObjectPath: string): Promise<ExtractionResult> {
-  logger.info({ paperId, pdfObjectPath }, "Starting Gemini Vision extraction via Files API");
-  await setAiStage(paperId, "vision_downloading_pdf");
+const PAGES_PER_CHUNK = 18;
 
-  const pdfBuffer = await storage.downloadObject(pdfObjectPath);
+async function getPdfPageCount(pdfBuffer: Buffer): Promise<number> {
+  try {
+    const { PDFDocument } = await import("pdf-lib");
+    const doc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
+    return doc.getPageCount();
+  } catch {
+    return 0;
+  }
+}
 
-  await setAiStage(paperId, "vision_uploading_to_gemini");
-  logger.info({ paperId, sizeKb: Math.round(pdfBuffer.length / 1024) }, "Uploading PDF to Gemini Files API");
+async function splitPdfIntoChunks(pdfBuffer: Buffer, pagesPerChunk: number): Promise<Buffer[]> {
+  const { PDFDocument } = await import("pdf-lib");
+  const srcDoc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
+  const totalPages = srcDoc.getPageCount();
+  const chunks: Buffer[] = [];
+  for (let start = 0; start < totalPages; start += pagesPerChunk) {
+    const end = Math.min(start + pagesPerChunk, totalPages);
+    const chunkDoc = await PDFDocument.create();
+    const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
+    const copiedPages = await chunkDoc.copyPages(srcDoc, pageIndices);
+    copiedPages.forEach((p) => chunkDoc.addPage(p));
+    const bytes = await chunkDoc.save();
+    chunks.push(Buffer.from(bytes));
+  }
+  return chunks;
+}
 
-  // Upload PDF directly — no image conversion needed
+async function uploadAndWaitForGeminiFile(pdfBuffer: Buffer, label: string): Promise<{ uri: string; name: string }> {
   const pdfBlob = new Blob([pdfBuffer], { type: "application/pdf" });
   const uploadedFile = await withRetry(() => ai.files.upload({
     file: pdfBlob,
-    config: { mimeType: "application/pdf", displayName: `paper-${paperId}.pdf` },
+    config: { mimeType: "application/pdf", displayName: label },
   }));
-
-  // Wait for file to be ready (usually instant for PDFs < 20MB)
   let fileInfo = uploadedFile;
   let waitMs = 0;
   while (fileInfo.state === "PROCESSING" && waitMs < 60000) {
@@ -205,33 +253,119 @@ async function runVisionExtraction(paperId: number, pdfObjectPath: string): Prom
     fileInfo = await ai.files.get({ name: fileInfo.name! });
     waitMs += 2000;
   }
-
   if (fileInfo.state === "FAILED") {
     await ai.files.delete({ name: fileInfo.name! }).catch(() => {});
-    throw new Error("Gemini Files API: PDF processing failed");
+    throw new Error("Gemini Files API: PDF chunk processing failed");
+  }
+  return { uri: fileInfo.uri!, name: fileInfo.name! };
+}
+
+function chunkVisionPrompt(startQuestionHint: number, isLastChunk: boolean): string {
+  return `${VISION_SYSTEM_PROMPT}
+
+IMPORTANT: This is a portion of a larger exam paper.
+- Start numbering questions from ${startQuestionHint} (continue from previous chunk).
+- Extract ALL questions visible in these pages.
+- Do NOT skip any question.${isLastChunk ? "" : "\n- There may be more questions after this chunk — extract what you see here."}`;
+}
+
+async function runVisionExtraction(paperId: number, pdfObjectPath: string): Promise<ExtractionResult> {
+  logger.info({ paperId, pdfObjectPath }, "Starting Gemini Vision extraction via Files API");
+  await setAiStage(paperId, "vision_downloading_pdf");
+
+  const pdfBuffer = await storage.downloadObject(pdfObjectPath);
+  const totalPages = await getPdfPageCount(pdfBuffer);
+
+  logger.info({ paperId, totalPages, sizeKb: Math.round(pdfBuffer.length / 1024) }, "PDF info");
+
+  // If small enough, process as a single call
+  if (totalPages <= PAGES_PER_CHUNK || totalPages === 0) {
+    await setAiStage(paperId, "vision_uploading_to_gemini");
+    const { uri, name } = await uploadAndWaitForGeminiFile(pdfBuffer, `paper-${paperId}.pdf`);
+    await setAiStage(paperId, "vision_extracting");
+    try {
+      const response = await withRetry(() => ai.models.generateContent({
+        model: "gemini-2.5-flash-lite",
+        contents: [{
+          role: "user",
+          parts: [
+            { fileData: { fileUri: uri, mimeType: "application/pdf" } },
+            { text: VISION_SYSTEM_PROMPT },
+          ],
+        }],
+        config: { maxOutputTokens: 65536, responseMimeType: "application/json" },
+      }));
+      const finishReason = response.candidates?.[0]?.finishReason;
+      return safeParseGeminiJson<ExtractionResult>(response.text ?? "", finishReason);
+    } finally {
+      await ai.files.delete({ name }).catch(() => {});
+    }
   }
 
-  logger.info({ paperId, fileName: fileInfo.name, state: fileInfo.state }, "PDF ready in Gemini Files API, starting extraction");
-  await setAiStage(paperId, "vision_extracting");
+  // Split into chunks and process each
+  const numChunks = Math.ceil(totalPages / PAGES_PER_CHUNK);
+  logger.info({ paperId, totalPages, numChunks, pagesPerChunk: PAGES_PER_CHUNK }, "Splitting PDF into chunks for extraction");
+  await setAiStage(paperId, "vision_splitting_chunks");
 
-  try {
-    const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-2.5-flash-lite",
-      contents: [{
-        role: "user",
-        parts: [
-          { fileData: { fileUri: fileInfo.uri!, mimeType: "application/pdf" } },
-          { text: VISION_SYSTEM_PROMPT },
-        ],
-      }],
-      config: { maxOutputTokens: 65536, responseMimeType: "application/json" },
-    }));
+  const pdfChunks = await splitPdfIntoChunks(pdfBuffer, PAGES_PER_CHUNK);
+  const allQuestions: ExtractionResult["questions"] = [];
+  let combinedText = "";
+  let nextQuestionNumber = 1;
 
-    const finishReason = response.candidates?.[0]?.finishReason;
-    return safeParseGeminiJson<ExtractionResult>(response.text ?? "", finishReason);
-  } finally {
-    await ai.files.delete({ name: fileInfo.name! }).catch(() => {});
+  for (let chunkIdx = 0; chunkIdx < pdfChunks.length; chunkIdx++) {
+    const chunkNum = chunkIdx + 1;
+    const isLastChunk = chunkIdx === pdfChunks.length - 1;
+    await setAiStage(paperId, `vision_chunk_${chunkNum}_of_${numChunks}`);
+    logger.info({ paperId, chunkNum, numChunks, nextQuestionNumber }, "Processing PDF chunk");
+
+    const chunkBuffer = pdfChunks[chunkIdx];
+    let geminiName: string | null = null;
+    try {
+      const { uri, name } = await uploadAndWaitForGeminiFile(chunkBuffer, `paper-${paperId}-chunk-${chunkNum}.pdf`);
+      geminiName = name;
+
+      const prompt = chunkVisionPrompt(nextQuestionNumber, isLastChunk);
+      const response = await withRetry(() => ai.models.generateContent({
+        model: "gemini-2.5-flash-lite",
+        contents: [{
+          role: "user",
+          parts: [
+            { fileData: { fileUri: uri, mimeType: "application/pdf" } },
+            { text: prompt },
+          ],
+        }],
+        config: { maxOutputTokens: 65536, responseMimeType: "application/json" },
+      }));
+
+      const finishReason = response.candidates?.[0]?.finishReason;
+      // For chunks, try to parse even partial results on MAX_TOKENS
+      let chunkResult: ExtractionResult;
+      if (finishReason === "MAX_TOKENS") {
+        logger.warn({ paperId, chunkNum }, "Chunk hit MAX_TOKENS — attempting partial parse");
+        chunkResult = safeParseGeminiJsonPartial<ExtractionResult>(response.text ?? "");
+      } else {
+        chunkResult = safeParseGeminiJson<ExtractionResult>(response.text ?? "", finishReason);
+      }
+
+      // Re-number questions to be sequential across chunks
+      const chunkQuestions = chunkResult.questions.map((q, i) => ({
+        ...q,
+        questionNumber: nextQuestionNumber + i,
+      }));
+      allQuestions.push(...chunkQuestions);
+      if (chunkResult.fullCleanText) {
+        combinedText += (combinedText ? "\n\n" : "") + chunkResult.fullCleanText;
+      }
+      nextQuestionNumber += chunkQuestions.length;
+      logger.info({ paperId, chunkNum, questionsInChunk: chunkQuestions.length, totalSoFar: allQuestions.length }, "Chunk processed");
+    } catch (err) {
+      logger.warn({ paperId, chunkNum, err }, "Chunk extraction failed, skipping chunk");
+    } finally {
+      if (geminiName) await ai.files.delete({ name: geminiName }).catch(() => {});
+    }
   }
+
+  return { fullCleanText: combinedText, questions: allQuestions };
 }
 
 async function runAiExtraction(paperId: number): Promise<void> {
@@ -260,17 +394,66 @@ async function runAiExtraction(paperId: number): Promise<void> {
     }
   } else {
     try {
-      const response = await withRetry(() => ai.models.generateContent({
-        model: "gemini-2.5-flash-lite",
-        contents: [{
-          role: "user",
-          parts: [{ text: `${SYSTEM_PROMPT}\n\n---RAW PDF TEXT---\n${paper.fullPdfText!.slice(0, 60000)}\n---END---` }],
-        }],
-        config: { maxOutputTokens: 65536, responseMimeType: "application/json" },
-      }));
+      const TEXT_CHUNK_SIZE = 20000;
+      const fullText = paper.fullPdfText!;
+      const textChunks: string[] = [];
+      for (let i = 0; i < fullText.length; i += TEXT_CHUNK_SIZE) {
+        textChunks.push(fullText.slice(i, i + TEXT_CHUNK_SIZE));
+      }
 
-      const finishReason = response.candidates?.[0]?.finishReason;
-      flashResult = safeParseGeminiJson(response.text ?? "", finishReason);
+      if (textChunks.length <= 1) {
+        // Single chunk — original behaviour
+        await setAiStage(paperId, "flash_extract");
+        const response = await withRetry(() => ai.models.generateContent({
+          model: "gemini-2.5-flash-lite",
+          contents: [{
+            role: "user",
+            parts: [{ text: `${SYSTEM_PROMPT}\n\n---RAW PDF TEXT---\n${fullText.slice(0, TEXT_CHUNK_SIZE)}\n---END---` }],
+          }],
+          config: { maxOutputTokens: 65536, responseMimeType: "application/json" },
+        }));
+        const finishReason = response.candidates?.[0]?.finishReason;
+        flashResult = safeParseGeminiJson(response.text ?? "", finishReason);
+      } else {
+        // Multi-chunk text extraction
+        const numChunks = textChunks.length;
+        const allQuestions: ExtractionResult["questions"] = [];
+        let combinedText = "";
+        let nextQNum = 1;
+        for (let ci = 0; ci < numChunks; ci++) {
+          await setAiStage(paperId, `flash_chunk_${ci + 1}_of_${numChunks}`);
+          const chunkPrompt = `${SYSTEM_PROMPT}
+
+IMPORTANT: This is chunk ${ci + 1} of ${numChunks} of a larger exam paper.
+- Start numbering questions from ${nextQNum}.
+- Extract ALL questions visible in this chunk.
+
+---RAW PDF TEXT (CHUNK ${ci + 1}/${numChunks})---
+${textChunks[ci]}
+---END---`;
+          try {
+            const response = await withRetry(() => ai.models.generateContent({
+              model: "gemini-2.5-flash-lite",
+              contents: [{ role: "user", parts: [{ text: chunkPrompt }] }],
+              config: { maxOutputTokens: 65536, responseMimeType: "application/json" },
+            }));
+            const finishReason = response.candidates?.[0]?.finishReason;
+            let chunkResult: ExtractionResult;
+            if (finishReason === "MAX_TOKENS") {
+              chunkResult = safeParseGeminiJsonPartial<ExtractionResult>(response.text ?? "");
+            } else {
+              chunkResult = safeParseGeminiJson<ExtractionResult>(response.text ?? "", finishReason);
+            }
+            const chunkQuestions = chunkResult.questions.map((q, i) => ({ ...q, questionNumber: nextQNum + i }));
+            allQuestions.push(...chunkQuestions);
+            if (chunkResult.fullCleanText) combinedText += (combinedText ? "\n\n" : "") + chunkResult.fullCleanText;
+            nextQNum += chunkQuestions.length;
+          } catch (chunkErr) {
+            logger.warn({ paperId, chunkIdx: ci, chunkErr }, "Text chunk failed, skipping");
+          }
+        }
+        flashResult = { fullCleanText: combinedText, questions: allQuestions };
+      }
     } catch (err) {
       throw new Error(`Flash extraction failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -381,12 +564,17 @@ const STAGE_MESSAGES: Record<string, string> = {
   vision_converting_pages: "PDF process ho raha hai...",
   vision_uploading_to_gemini: "PDF Gemini Files API mein upload ho raha hai...",
   vision_extracting: "Gemini Vision puri PDF padh raha hai aur questions extract kar raha hai...",
+  vision_splitting_chunks: "Badi PDF ko chhote hisson mein split kar raha hai...",
 };
 
 function stageToMessage(stage: string): string {
   if (STAGE_MESSAGES[stage]) return STAGE_MESSAGES[stage];
   const proMatch = stage.match(/^pro_refine_(\d+)_of_(\d+)$/);
   if (proMatch) return `Pro model: Question ${proMatch[1]} of ${proMatch[2]} refine ho raha hai...`;
+  const visionChunkMatch = stage.match(/^vision_chunk_(\d+)_of_(\d+)$/);
+  if (visionChunkMatch) return `PDF ka part ${visionChunkMatch[1]} of ${visionChunkMatch[2]} extract ho raha hai...`;
+  const flashChunkMatch = stage.match(/^flash_chunk_(\d+)_of_(\d+)$/);
+  if (flashChunkMatch) return `Text chunk ${flashChunkMatch[1]} of ${flashChunkMatch[2]} process ho raha hai...`;
   return "Processing...";
 }
 
