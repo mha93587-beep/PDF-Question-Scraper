@@ -15,6 +15,7 @@ const STORAGE_KEY_BATCH = "qb_active_batch_job";
 
 type ItemStatus = "pending" | "processing" | "done" | "error";
 type JobStatus = "pending" | "downloading" | "processing" | "done" | "error";
+type ExtractionProvider = "local" | "marker";
 
 type BatchItem = {
   id: number;
@@ -44,6 +45,8 @@ const STAGE_LABELS: Record<string, string> = {
   pdf_parse: "pdf-parse",
   ocr: "OCR (slow)",
   parsing_questions: "Parsing Q's",
+  marker_uploading: "Marker upload",
+  marker_parsing_questions: "Parsing Marker",
 };
 
 const JOB_STATUS_LABEL: Record<JobStatus, string> = {
@@ -68,6 +71,7 @@ function ItemRow({ item }: { item: BatchItem }) {
   };
 
   const isOcr = item.processingStage === "ocr";
+  const isMarker = item.processingStage?.startsWith("marker") ?? false;
   const stageLabel = item.processingStage ? STAGE_LABELS[item.processingStage] ?? item.processingStage : null;
 
   return (
@@ -81,7 +85,7 @@ function ItemRow({ item }: { item: BatchItem }) {
       <div className="flex-1 min-w-0">
         <p className="font-medium truncate text-foreground">{item.fileName}</p>
         {item.status === "processing" && stageLabel && (
-          <p className={`text-xs mt-0.5 ${isOcr ? "text-amber-600 font-medium" : "text-blue-600"}`}>
+          <p className={`text-xs mt-0.5 ${isOcr ? "text-amber-600 font-medium" : isMarker ? "text-indigo-600" : "text-blue-600"}`}>
             {isOcr ? "⏳ " : ""}{stageLabel}{isOcr ? " — may take 3–8 min" : "..."}
           </p>
         )}
@@ -185,6 +189,7 @@ export default function BatchUploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [extractionProvider, setExtractionProvider] = useState<ExtractionProvider>("marker");
   const [activeJobId, setActiveJobId] = useState<number | null>(() => {
     try { const v = localStorage.getItem(STORAGE_KEY_BATCH); return v ? parseInt(v) : null; } catch { return null; }
   });
@@ -206,7 +211,7 @@ export default function BatchUploadPage() {
 
     const poll = async () => {
       try {
-        const res = await fetch(`/api/batch/${activeJobId}`);
+        const res = await fetch(`${import.meta.env.BASE_URL}api/batch/${activeJobId}`);
         if (!res.ok) return;
         const data: BatchJob = await res.json();
         setJob(data);
@@ -245,7 +250,7 @@ export default function BatchUploadPage() {
     setUploadProgress(0);
 
     try {
-      const urlRes = await fetch("/api/storage/uploads/request-url", {
+      const urlRes = await fetch(`${import.meta.env.BASE_URL}api/storage/uploads/request-url`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: file.name, size: file.size, contentType: "application/zip" }),
@@ -265,10 +270,10 @@ export default function BatchUploadPage() {
         xhr.send(file);
       });
 
-      const batchRes = await fetch("/api/batch/start", {
+      const batchRes = await fetch(`${import.meta.env.BASE_URL}api/batch/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ zipObjectPath: objectPath, zipFileName: file.name }),
+        body: JSON.stringify({ zipObjectPath: objectPath, zipFileName: file.name, provider: extractionProvider }),
       });
       if (!batchRes.ok) throw new Error("Failed to start batch job");
       const { jobId } = await batchRes.json();
@@ -276,7 +281,7 @@ export default function BatchUploadPage() {
       setFile(null);
       setUploadProgress(0);
       setActiveJobId(jobId);
-      toast({ title: "Batch Job Started!", description: `Processing ${file.name} in the background.` });
+      toast({ title: "Batch Job Started!", description: `Processing ${file.name} with ${extractionProvider === "marker" ? "Marker" : "Local OCR"} in the background.` });
     } catch (err: any) {
       toast({ title: "Upload Failed", description: err?.message ?? "Unknown error", variant: "destructive" });
     } finally {
@@ -338,13 +343,43 @@ export default function BatchUploadPage() {
             </div>
           )}
 
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Extraction Engine</p>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Button
+                type="button"
+                variant={extractionProvider === "marker" ? "default" : "outline"}
+                className="h-auto justify-start p-4"
+                disabled={isActive}
+                onClick={() => setExtractionProvider("marker")}
+              >
+                <div className="text-left">
+                  <div className="font-semibold">Marker API</div>
+                  <div className="text-xs opacity-80">Recommended for scanned papers, math, tables, and diagrams.</div>
+                </div>
+              </Button>
+              <Button
+                type="button"
+                variant={extractionProvider === "local" ? "default" : "outline"}
+                className="h-auto justify-start p-4"
+                disabled={isActive}
+                onClick={() => setExtractionProvider("local")}
+              >
+                <div className="text-left">
+                  <div className="font-semibold">Local OCR</div>
+                  <div className="text-xs opacity-80">Runs pdftotext, pdf-parse, and Tesseract one by one.</div>
+                </div>
+              </Button>
+            </div>
+          </div>
+
           <Button onClick={handleUpload} disabled={!file || isActive} className="w-full" size="lg">
             {isUploading ? (
               <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Uploading... {uploadProgress}%</>
             ) : activeJobId ? (
               <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Processing in background...</>
             ) : (
-              <><Upload className="w-4 h-4 mr-2" />Upload ZIP and Start Batch Extraction</>
+              <><Upload className="w-4 h-4 mr-2" />Upload ZIP and Extract with {extractionProvider === "marker" ? "Marker" : "Local OCR"}</>
             )}
           </Button>
 
@@ -352,7 +387,7 @@ export default function BatchUploadPage() {
             {[
               { icon: FileArchive, label: "Upload ZIP", desc: "Direct to Backblaze B2\nServer never overloads" },
               { icon: FileText, label: "Auto-extract PDFs", desc: "Each PDF detected\nautomatically from ZIP" },
-              { icon: BrainCircuit, label: "Sequential OCR", desc: "One-by-one processing\nScanned PDFs supported" },
+              { icon: BrainCircuit, label: extractionProvider === "marker" ? "Marker extraction" : "Sequential OCR", desc: extractionProvider === "marker" ? "One-by-one Marker conversion\nBetter layout + math support" : "One-by-one processing\nScanned PDFs supported" },
             ].map(({ icon: Icon, label, desc }) => (
               <div key={label} className="flex flex-col items-center gap-2 p-3 rounded-lg bg-muted/40">
                 <Icon className="w-6 h-6 text-primary" />

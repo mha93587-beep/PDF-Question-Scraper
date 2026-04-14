@@ -57,6 +57,8 @@ A full-stack web application that scrapes previous year question papers from PDF
 - Required secret: `MARKER_API_KEY` (or `DATALAB_API_KEY` as a fallback name).
 - Server files: `artifacts/api-server/src/lib/marker.ts`, `artifacts/api-server/src/routes/marker.ts`, and `artifacts/api-server/src/routes/papers.ts`.
 - Health check: `GET /api/marker/health` checks Marker availability without exposing the key.
+- Batch ZIP Upload also supports the same **Marker API** vs **Local OCR** selection; the selected provider is passed to `/api/batch/start`.
+- Paper detail and question list views render question text/options/notes with Markdown-style emphasis and KaTeX for LaTeX delimiters such as `$...$`, `$$...$$`, `\(...\)`, and `\[...\]`.
 
 ## AI Extract (Gemini Integration)
 

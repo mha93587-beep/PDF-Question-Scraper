@@ -3,12 +3,14 @@ import { eq } from "drizzle-orm";
 import JSZip from "jszip";
 import { db } from "@workspace/db";
 import { batchJobsTable, batchItemsTable, papersTable, questionsTable } from "@workspace/db";
-import { parsePdfText, type ParseResult } from "../lib/pdf-parser.js";
+import { parseExtractedQuestionText, parsePdfText, type ParseResult } from "../lib/pdf-parser.js";
 import { B2StorageService } from "../lib/b2Storage.js";
 import { logger } from "../lib/logger.js";
+import { convertPdfWithMarker } from "../lib/marker.js";
 
 const router = Router();
 const storage = new B2StorageService();
+type ExtractionProvider = "local" | "marker";
 
 async function uploadQuestionFiguresToB2(
   paperId: number,
@@ -32,7 +34,7 @@ function guessExamNameFromFile(fileName: string): string {
   return fileName.replace(/\.pdf$/i, "").trim();
 }
 
-async function processBatchInBackground(jobId: number) {
+async function processBatchInBackground(jobId: number, provider: ExtractionProvider = "local") {
   let zipObjectPath: string | null = null;
   try {
     const [job] = await db.select().from(batchJobsTable).where(eq(batchJobsTable.id, jobId));
@@ -78,7 +80,7 @@ async function processBatchInBackground(jobId: number) {
 
       try {
         await db.update(batchItemsTable)
-          .set({ status: "processing", processingStage: "extracting" })
+          .set({ status: "processing", processingStage: provider === "marker" ? "marker_uploading" : "extracting" })
           .where(eq(batchItemsTable.id, item.id));
 
         const pdfBuffer = Buffer.from(await zipEntry.async("arraybuffer"));
@@ -86,7 +88,7 @@ async function processBatchInBackground(jobId: number) {
         const [paper] = await db.insert(papersTable).values({
           examName: placeholderName,
           processingStatus: "processing",
-          processingStage: "extracting",
+          processingStage: provider === "marker" ? "marker_uploading" : "extracting",
           fileName: shortName,
         }).returning();
 
@@ -99,7 +101,26 @@ async function processBatchInBackground(jobId: number) {
             .where(eq(papersTable.id, paper.id));
         };
 
-        const result = await parsePdfText(pdfBuffer, setStage);
+        let result: ParseResult;
+        if (provider === "marker") {
+          await setStage("marker_uploading");
+          const markerResult = await convertPdfWithMarker(pdfBuffer, shortName);
+          await setStage("marker_parsing_questions");
+          result = parseExtractedQuestionText(markerResult.markdown);
+          logger.info(
+            {
+              jobId,
+              itemId: item.id,
+              paperId: paper.id,
+              pageCount: markerResult.pageCount,
+              parseQualityScore: markerResult.parseQualityScore,
+              runtime: markerResult.runtime,
+            },
+            "Marker batch conversion completed"
+          );
+        } else {
+          result = await parsePdfText(pdfBuffer, setStage);
+        }
 
         await db.update(batchItemsTable)
           .set({ processingStage: "uploading_figures" })
@@ -183,6 +204,7 @@ async function processBatchInBackground(jobId: number) {
 
 router.post("/batch/start", async (req, res) => {
   const { zipObjectPath, zipFileName } = req.body;
+  const provider: ExtractionProvider = req.body.provider === "marker" ? "marker" : "local";
   if (!zipObjectPath) {
     res.status(400).json({ error: "zipObjectPath is required" });
     return;
@@ -194,9 +216,9 @@ router.post("/batch/start", async (req, res) => {
     status: "pending",
   }).returning();
 
-  processBatchInBackground(job.id).catch(console.error);
+  processBatchInBackground(job.id, provider).catch(console.error);
 
-  res.json({ jobId: job.id });
+  res.json({ jobId: job.id, provider });
 });
 
 router.get("/batch/:jobId", async (req, res) => {

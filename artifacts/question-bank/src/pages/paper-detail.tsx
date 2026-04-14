@@ -45,6 +45,7 @@ import {
   Upload,
 } from "lucide-react";
 import type { Question } from "@workspace/api-client-react";
+import { QuestionRichText } from "@/components/question-rich-text";
 
 export default function PaperDetailPage({ id }: { id: string }) {
   const paperId = parseInt(id, 10);
@@ -225,7 +226,9 @@ export default function PaperDetailPage({ id }: { id: string }) {
                 </div>
               </div>
 
-              <p className="text-foreground mb-4 leading-relaxed whitespace-pre-wrap">{q.questionText}</p>
+              <div className="text-foreground mb-4">
+                <QuestionRichText text={q.questionText} />
+              </div>
 
               {q.figureData && (
                 <div className="mb-4 rounded-lg border bg-white p-2">
@@ -255,7 +258,7 @@ export default function PaperDetailPage({ id }: { id: string }) {
                       }`}
                     >
                       <span className="font-semibold shrink-0">{opt.label}.</span>
-                      <span>{opt.value}</span>
+                      <QuestionRichText text={opt.value} className="min-w-0 flex-1" />
                     </div>
                   ) : null
                 )}
@@ -263,7 +266,7 @@ export default function PaperDetailPage({ id }: { id: string }) {
 
               {q.note && (
                 <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
-                  Note: {q.note}
+                  <span className="font-medium">Note: </span><QuestionRichText text={q.note} />
                 </div>
               )}
             </CardContent>

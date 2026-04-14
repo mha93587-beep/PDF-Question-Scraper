@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Loader2, ImageIcon, CheckCircle2, Filter, X } from "lucide-react";
+import { QuestionRichText } from "@/components/question-rich-text";
 
 export default function QuestionsPage() {
   const [paperId, setPaperId] = useState<number | undefined>(undefined);
@@ -113,7 +114,9 @@ export default function QuestionsPage() {
                   )}
                 </div>
 
-                <p className="text-foreground mb-3 leading-relaxed">{q.questionText}</p>
+                <div className="text-foreground mb-3">
+                  <QuestionRichText text={q.questionText} />
+                </div>
 
                 {q.figureData && (
                   <div className="mb-3 rounded-lg border bg-white p-2">
@@ -143,7 +146,7 @@ export default function QuestionsPage() {
                         }`}
                       >
                         <span className="font-semibold shrink-0">{opt.label}.</span>
-                        <span>{opt.value}</span>
+                        <QuestionRichText text={opt.value} className="min-w-0 flex-1" />
                       </div>
                     ) : null
                   )}
