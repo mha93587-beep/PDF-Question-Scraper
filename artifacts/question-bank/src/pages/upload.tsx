@@ -350,7 +350,7 @@ export default function UploadPage() {
               >
                 <div className="text-left">
                   <div className="font-semibold">Local OCR</div>
-                  <div className="text-xs opacity-80">Runs inside Replit using pdftotext, pdf-parse, and OCR.</div>
+                  <div className="text-xs opacity-80">Runs inside Railway using pdftotext, pdf-parse, and OCR.</div>
                 </div>
               </Button>
             </div>
