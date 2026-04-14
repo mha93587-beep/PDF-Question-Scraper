@@ -106,7 +106,8 @@ async function processBatchInBackground(jobId: number, provider: ExtractionProvi
           await setStage("marker_uploading");
           const markerResult = await convertPdfWithMarker(pdfBuffer, shortName);
           await setStage("marker_parsing_questions");
-          result = parseExtractedQuestionText(markerResult.markdown);
+
+          const imageCount = Object.keys(markerResult.images).length;
           logger.info(
             {
               jobId,
@@ -115,9 +116,36 @@ async function processBatchInBackground(jobId: number, provider: ExtractionProvi
               pageCount: markerResult.pageCount,
               parseQualityScore: markerResult.parseQualityScore,
               runtime: markerResult.runtime,
+              imageCount,
             },
             "Marker batch conversion completed"
           );
+
+          let markdown = markerResult.markdown;
+          if (imageCount > 0) {
+            await setStage("uploading_marker_figures");
+            for (const [imageName, base64Data] of Object.entries(markerResult.images)) {
+              try {
+                const imageBuffer = Buffer.from(base64Data, "base64");
+                const ext = imageName.split(".").pop()?.toLowerCase() || "jpg";
+                const contentType = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+                const key = `marker-figures/${paper.id}/${imageName}`;
+                await storage.uploadBuffer(key, imageBuffer, contentType);
+                const objectPath = storage.toObjectPath(key);
+                const accessUrl = `/api/figure?path=${encodeURIComponent(objectPath)}`;
+                const escapedName = imageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                markdown = markdown.replace(
+                  new RegExp(`(!\\[[^\\]]*\\])\\(${escapedName}\\)`, "g"),
+                  `$1(${accessUrl})`
+                );
+                logger.info({ paperId: paper.id, imageName, key }, "Marker figure uploaded to B2 (batch)");
+              } catch (err) {
+                logger.warn({ err, paperId: paper.id, imageName }, "Failed to upload Marker figure to B2 (batch)");
+              }
+            }
+          }
+
+          result = parseExtractedQuestionText(markdown);
         } else {
           result = await parsePdfText(pdfBuffer, setStage);
         }

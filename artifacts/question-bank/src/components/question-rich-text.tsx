@@ -16,7 +16,7 @@ function cleanupExtractedText(text: string): string {
     .replace(/\s*Option\s+\d+\s+ID\s*:\s*\d+/gi, "")
     .replace(/\s*Status\s*:\s*(?:Answered|Not Answered|Not Visited|Marked).*$/gim, "")
     .replace(/\s*Chosen Option\s*:\s*[-\d]+/gi, "")
-    .replace(/\[([^\]]*)\]\((?:[^)]+\.jpg|[^)]+\.jpeg|[^)]+\.png|[^)]+\.webp)\)/gi, "[$1]")
+    .replace(/!\[([^\]]*)\]\((?!https?:\/\/|\/api\/)(?:[^)]+\.jpg|[^)]+\.jpeg|[^)]+\.png|[^)]+\.webp)\)/gi, "[$1]")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -134,6 +134,22 @@ export function QuestionRichText({ text, className = "" }: { text?: string | nul
           );
         }
         if (segment.type === "image") {
+          const isRealUrl = segment.src.startsWith("/") || segment.src.startsWith("http");
+          if (isRealUrl) {
+            return (
+              <span key={index} className="my-2 block">
+                <img
+                  src={segment.src}
+                  alt={segment.alt || "Figure"}
+                  className="max-w-full rounded-md border"
+                  loading="lazy"
+                />
+                {segment.alt && (
+                  <span className="mt-1 block text-xs text-muted-foreground">{segment.alt}</span>
+                )}
+              </span>
+            );
+          }
           return (
             <span key={index} className="my-2 flex items-center gap-2 rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
               <ImageIcon className="h-3.5 w-3.5 shrink-0" />

@@ -69,16 +69,45 @@ async function processPdfAndSave(
       await setStage(paperId, "marker_uploading");
       const markerResult = await convertPdfWithMarker(pdfBuffer, fileName);
       await setStage(paperId, "marker_parsing_questions");
-      result = parseExtractedQuestionText(markerResult.markdown);
+
+      const imageCount = Object.keys(markerResult.images).length;
       logger.info(
         {
           paperId,
           pageCount: markerResult.pageCount,
           parseQualityScore: markerResult.parseQualityScore,
           runtime: markerResult.runtime,
+          imageCount,
         },
         "Marker conversion completed"
       );
+
+      let markdown = markerResult.markdown;
+
+      if (imageCount > 0) {
+        await setStage(paperId, "uploading_marker_figures");
+        for (const [imageName, base64Data] of Object.entries(markerResult.images)) {
+          try {
+            const imageBuffer = Buffer.from(base64Data, "base64");
+            const ext = imageName.split(".").pop()?.toLowerCase() || "jpg";
+            const contentType = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+            const key = `marker-figures/${paperId}/${imageName}`;
+            await storage.uploadBuffer(key, imageBuffer, contentType);
+            const objectPath = storage.toObjectPath(key);
+            const accessUrl = `/api/figure?path=${encodeURIComponent(objectPath)}`;
+            const escapedName = imageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            markdown = markdown.replace(
+              new RegExp(`(!\\[[^\\]]*\\])\\(${escapedName}\\)`, "g"),
+              `$1(${accessUrl})`
+            );
+            logger.info({ paperId, imageName, key }, "Marker figure uploaded to B2");
+          } catch (err) {
+            logger.warn({ err, paperId, imageName }, "Failed to upload Marker figure to B2");
+          }
+        }
+      }
+
+      result = parseExtractedQuestionText(markdown);
     } else {
       await setStage(paperId, "extracting_text");
       result = await parsePdfText(pdfBuffer, (stage) => setStage(paperId, stage));

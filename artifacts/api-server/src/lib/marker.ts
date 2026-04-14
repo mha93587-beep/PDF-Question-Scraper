@@ -15,6 +15,7 @@ type MarkerResultResponse = {
   markdown?: string | null;
   html?: string | null;
   json?: unknown;
+  images?: Record<string, string> | null;
   success?: boolean | null;
   error?: string | null;
   page_count?: number | null;
@@ -24,6 +25,7 @@ type MarkerResultResponse = {
 
 export type MarkerConversionResult = {
   markdown: string;
+  images: Record<string, string>;
   pageCount: number | null;
   parseQualityScore: number | null;
   runtime: number | null;
@@ -117,6 +119,7 @@ export async function convertPdfWithMarker(
 
       return {
         markdown: result.markdown,
+        images: result.images ?? {},
         pageCount: result.page_count ?? null,
         parseQualityScore: result.parse_quality_score ?? null,
         runtime: result.runtime ?? null,
