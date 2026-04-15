@@ -23,7 +23,7 @@ const upload = multer({
 const SYSTEM_PROMPT = `You are an expert at extracting and structuring exam questions from Indian competitive exam PDFs (UPSC, RRB, SSC, JEE, NEET, etc.).
 
 Your task:
-1. Extract ALL questions from the provided content.
+1. Extract ALL questions from the provided content. Do NOT skip any question — even if it contains an image reference.
 2. Clean up any OCR artifacts, broken lines, garbled characters, and incomplete sentences.
 3. For ALL mathematical expressions, formulas, equations, and reasoning steps: use LaTeX notation.
    - Inline math: wrap in $...$ (e.g., $x^2 + y^2 = z^2$)
@@ -32,6 +32,13 @@ Your task:
 5. The "note" field should contain a detailed step-by-step explanation/solution of the question.
 6. The "correctAnswer" must be one of: "A", "B", "C", or "D".
 7. Set "needsProReview" to true ONLY if the question contains complex multi-step derivations or tricky formula-heavy math.
+8. IMAGE HANDLING — Very Important:
+   - The text may contain markdown image references like: ![alt text describing the image](url)
+   - These are actual exam figures/diagrams embedded in the question.
+   - Do NOT skip or ignore questions that contain image references.
+   - In "questionText", replace the markdown image with: [Figure: <copy the alt text description here>]
+   - Example: "![Venn diagram with two circles](url)" → "[Figure: Venn diagram with two circles]"
+   - The answer options that are also images (like option A showing a diagram) should be described as: "[Figure: <alt text>]"
 
 Return ONLY a valid JSON object in this exact format (no markdown, no code blocks, no extra text):
 {
@@ -368,6 +375,65 @@ async function runVisionExtraction(paperId: number, pdfObjectPath: string): Prom
   return { fullCleanText: combinedText, questions: allQuestions };
 }
 
+/**
+ * Split text into chunks aligned to question boundaries.
+ * Splits right before "Q.N" / "Q N" patterns so questions are never cut in half.
+ * Falls back to character-based splitting if no question markers are found.
+ */
+function splitTextByQuestionBoundary(text: string, maxCharsPerChunk: number): string[] {
+  // Match lines that start a new question: "Q.1", "Q1.", "Q 1", "Q.1.", etc.
+  // Also handles Hindi/Marker API formats
+  const qRegex = /(?:^|\n)(Q\.?\s*\d+[\s.:)–-])/gm;
+  const positions: number[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = qRegex.exec(text)) !== null) {
+    // Position is right at start of this match (after the preceding \n)
+    const pos = m.index === 0 ? 0 : m.index + 1;
+    positions.push(pos);
+  }
+
+  if (positions.length < 2) {
+    // No reliable question markers — fall back to character splitting
+    const chunks: string[] = [];
+    for (let i = 0; i < text.length; i += maxCharsPerChunk) {
+      chunks.push(text.slice(i, i + maxCharsPerChunk));
+    }
+    return chunks.filter((c) => c.trim().length > 0);
+  }
+
+  const chunks: string[] = [];
+  let chunkStart = 0;
+  let lastQPos = positions[0];
+
+  for (let i = 1; i < positions.length; i++) {
+    const qPos = positions[i];
+    // If adding up to this question start would exceed the limit, cut before it
+    if (qPos - chunkStart > maxCharsPerChunk && qPos > lastQPos) {
+      chunks.push(text.slice(chunkStart, qPos));
+      chunkStart = qPos;
+    }
+    lastQPos = qPos;
+  }
+  // Push remaining text
+  if (chunkStart < text.length) {
+    chunks.push(text.slice(chunkStart));
+  }
+
+  // Safety: if any single chunk is still too large, sub-split it by characters
+  const result: string[] = [];
+  for (const chunk of chunks) {
+    if (chunk.length > maxCharsPerChunk * 1.5) {
+      for (let i = 0; i < chunk.length; i += maxCharsPerChunk) {
+        result.push(chunk.slice(i, i + maxCharsPerChunk));
+      }
+    } else {
+      result.push(chunk);
+    }
+  }
+
+  return result.filter((c) => c.trim().length > 0);
+}
+
 async function runAiExtraction(paperId: number): Promise<void> {
   const [paper] = await db.select().from(papersTable).where(eq(papersTable.id, paperId));
   if (!paper) throw new Error("Paper not found.");
@@ -394,28 +460,25 @@ async function runAiExtraction(paperId: number): Promise<void> {
     }
   } else {
     try {
-      const TEXT_CHUNK_SIZE = 20000;
+      const MAX_CHARS_PER_CHUNK = 28000;
       const fullText = paper.fullPdfText!;
-      const textChunks: string[] = [];
-      for (let i = 0; i < fullText.length; i += TEXT_CHUNK_SIZE) {
-        textChunks.push(fullText.slice(i, i + TEXT_CHUNK_SIZE));
-      }
+      const textChunks = splitTextByQuestionBoundary(fullText, MAX_CHARS_PER_CHUNK);
+
+      logger.info({ paperId, totalChars: fullText.length, numChunks: textChunks.length }, "Text chunking complete");
 
       if (textChunks.length <= 1) {
-        // Single chunk — original behaviour
         await setAiStage(paperId, "flash_extract");
         const response = await withRetry(() => ai.models.generateContent({
           model: "gemini-2.5-flash-lite",
           contents: [{
             role: "user",
-            parts: [{ text: `${SYSTEM_PROMPT}\n\n---RAW PDF TEXT---\n${fullText.slice(0, TEXT_CHUNK_SIZE)}\n---END---` }],
+            parts: [{ text: `${SYSTEM_PROMPT}\n\n---RAW PDF TEXT---\n${fullText}\n---END---` }],
           }],
           config: { maxOutputTokens: 65536, responseMimeType: "application/json" },
         }));
         const finishReason = response.candidates?.[0]?.finishReason;
         flashResult = safeParseGeminiJson(response.text ?? "", finishReason);
       } else {
-        // Multi-chunk text extraction
         const numChunks = textChunks.length;
         const allQuestions: ExtractionResult["questions"] = [];
         let combinedText = "";
@@ -424,11 +487,11 @@ async function runAiExtraction(paperId: number): Promise<void> {
           await setAiStage(paperId, `flash_chunk_${ci + 1}_of_${numChunks}`);
           const chunkPrompt = `${SYSTEM_PROMPT}
 
-IMPORTANT: This is chunk ${ci + 1} of ${numChunks} of a larger exam paper.
-- Start numbering questions from ${nextQNum}.
-- Extract ALL questions visible in this chunk.
+IMPORTANT: This is part ${ci + 1} of ${numChunks} of a larger exam paper.
+- Start numbering questions from ${nextQNum} (continue from where previous part ended).
+- Extract ALL questions you can see in this part. Do NOT skip questions with image references.
 
----RAW PDF TEXT (CHUNK ${ci + 1}/${numChunks})---
+---RAW PDF TEXT (PART ${ci + 1}/${numChunks})---
 ${textChunks[ci]}
 ---END---`;
           try {
@@ -440,6 +503,7 @@ ${textChunks[ci]}
             const finishReason = response.candidates?.[0]?.finishReason;
             let chunkResult: ExtractionResult;
             if (finishReason === "MAX_TOKENS") {
+              logger.warn({ paperId, ci }, "Text chunk hit MAX_TOKENS — partial parse");
               chunkResult = safeParseGeminiJsonPartial<ExtractionResult>(response.text ?? "");
             } else {
               chunkResult = safeParseGeminiJson<ExtractionResult>(response.text ?? "", finishReason);
@@ -448,8 +512,9 @@ ${textChunks[ci]}
             allQuestions.push(...chunkQuestions);
             if (chunkResult.fullCleanText) combinedText += (combinedText ? "\n\n" : "") + chunkResult.fullCleanText;
             nextQNum += chunkQuestions.length;
+            logger.info({ paperId, ci, questionsInChunk: chunkQuestions.length, totalSoFar: allQuestions.length }, "Text chunk done");
           } catch (chunkErr) {
-            logger.warn({ paperId, chunkIdx: ci, chunkErr }, "Text chunk failed, skipping");
+            logger.error({ paperId, ci, chunkErr }, "Text chunk FAILED — will skip this part");
           }
         }
         flashResult = { fullCleanText: combinedText, questions: allQuestions };
